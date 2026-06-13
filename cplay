@@ -1,0 +1,1465 @@
+#!/usr/bin/env bash
+
+# --- Included: src/backend/driver_mpv.sh ---
+driver_mpv_init() {
+    mpv --idle --no-video --input-ipc-server="$MPV_SOCKET" --quiet >/dev/null 2>&1 &
+    bl_pid_store "mpv_backend" $!
+}
+driver_mpv_play() {
+    local source="$1"
+    echo '{"command": ["loadfile", "'"$source"'"]}' | socat - "$MPV_SOCKET" >/dev/null 2>&1
+}
+driver_mpv_pause_toggle() {
+    echo '{"command": ["cycle", "pause"]}' | socat - "$MPV_SOCKET" >/dev/null 2>&1
+}
+driver_mpv_seek() {
+    local seconds="$1"
+    echo '{"command": ["seek", '"$seconds"', "relative"]}' | socat - "$MPV_SOCKET" >/dev/null 2>&1
+}
+driver_mpv_volume() {
+    local change="$1" # e.g. "5" or "-5"
+    echo '{"command": ["add", "volume", '"$change"']}' | socat - "$MPV_SOCKET" >/dev/null 2>&1
+}
+driver_mpv_status() {
+    if [[ -S "$MPV_SOCKET" ]]; then
+        if echo '{"command": ["get_property", "pause"]}' | socat - "$MPV_SOCKET" >/dev/null 2>&1; then
+            echo "active"
+            return 0
+        fi
+    fi
+    echo "inactive"
+    return 1
+}
+
+# --- Included: src/backend/driver_raw.sh ---
+_detect_output_cmd() {
+    if command -v pw-cat >/dev/null 2>&1; then
+        echo "pw-cat --playback"
+    elif command -v pacat >/dev/null 2>&1; then
+        echo "pacat --playback"
+    else
+        echo ""
+    fi
+}
+driver_raw_init() {
+    :
+}
+driver_raw_play() {
+    local source="$1"
+    RAW_CURRENT_FILE="$source"
+    RAW_CURRENT_OFFSET=0
+    RAW_PAUSE_STATE="false"
+    local out_cmd
+    local out_format
+    if command -v pw-cat >/dev/null 2>&1; then
+        out_cmd="pw-cat --playback --raw"
+        out_format="--format=s16"
+    elif command -v pacat >/dev/null 2>&1; then
+        out_cmd="pacat --playback"
+        out_format="--format=s16le"
+    else
+        echo "Error: No PipeWire (pw-cat) or PulseAudio (pacat) found." >&2
+        return 1
+    fi
+    local ffmpeg_old_pid
+    ffmpeg_old_pid=$(bl_pid_status "raw_ffmpeg" 2>/dev/null) # wait, let's just kill them if stored
+    if [[ -n "${BL_PIDS["raw_backend"]}" ]]; then
+        kill -TERM "${BL_PIDS["raw_backend"]}" 2>/dev/null
+    fi
+    if [[ -n "${BL_PIDS["raw_ffmpeg"]}" ]]; then
+        kill -TERM "${BL_PIDS["raw_ffmpeg"]}" 2>/dev/null
+    fi
+    local fifo="$TMP/cplay-raw.fifo"
+    rm -f "$fifo"
+    mkfifo "$fifo"
+    ffmpeg -ss "$RAW_CURRENT_OFFSET" -i "$RAW_CURRENT_FILE" -ar 44100 -ac 2 -f s16le -acodec pcm_s16le - 2>"$TMP/cplay-raw.log" > "$fifo" &
+    local ffmpeg_pid=$!
+    bl_pid_store "raw_ffmpeg" "$ffmpeg_pid"
+    $out_cmd $out_format --rate=44100 --channels=2 "$fifo" 2>>"$TMP/cplay-raw.log" &
+    RAW_PLAYER_PID=$!
+    bl_pid_store "raw_backend" "$RAW_PLAYER_PID"
+}
+driver_raw_pause_toggle() {
+    if [[ -z "$RAW_PLAYER_PID" ]]; then return; fi
+    if [[ "$RAW_PAUSE_STATE" == "false" ]]; then
+        kill -STOP "$RAW_PLAYER_PID" 2>/dev/null
+        RAW_PAUSE_STATE="true"
+    else
+        kill -CONT "$RAW_PLAYER_PID" 2>/dev/null
+        RAW_PAUSE_STATE="false"
+    fi
+}
+driver_raw_seek() {
+    local seconds="$1" # relative offset, e.g. "+10" or "-10"
+    if [[ -z "$RAW_PLAYER_PID" || -z "$RAW_CURRENT_FILE" ]]; then return; fi
+    RAW_CURRENT_OFFSET=$(( RAW_CURRENT_OFFSET + seconds ))
+    if (( RAW_CURRENT_OFFSET < 0 )); then RAW_CURRENT_OFFSET=0; fi
+    local out_cmd
+    local out_format
+    if command -v pw-cat >/dev/null 2>&1; then
+        out_cmd="pw-cat --playback --raw"
+        out_format="--format=s16"
+    elif command -v pacat >/dev/null 2>&1; then
+        out_cmd="pacat --playback"
+        out_format="--format=s16le"
+    else
+        return 1
+    fi
+    if [[ -n "${BL_PIDS["raw_backend"]}" ]]; then
+        kill -TERM "${BL_PIDS["raw_backend"]}" 2>/dev/null
+    fi
+    if [[ -n "${BL_PIDS["raw_ffmpeg"]}" ]]; then
+        kill -TERM "${BL_PIDS["raw_ffmpeg"]}" 2>/dev/null
+    fi
+    local fifo="$TMP/cplay-raw.fifo"
+    rm -f "$fifo"
+    mkfifo "$fifo"
+    ffmpeg -ss "$RAW_CURRENT_OFFSET" -i "$RAW_CURRENT_FILE" -ar 44100 -ac 2 -f s16le -acodec pcm_s16le - 2>"$TMP/cplay-raw.log" > "$fifo" &
+    local ffmpeg_pid=$!
+    bl_pid_store "raw_ffmpeg" "$ffmpeg_pid"
+    $out_cmd $out_format --rate=44100 --channels=2 "$fifo" 2>>"$TMP/cplay-raw.log" &
+    RAW_PLAYER_PID=$!
+    bl_pid_store "raw_backend" "$RAW_PLAYER_PID"
+}
+driver_raw_volume() {
+    local change="$1" # e.g. "5" or "-5"
+    if [[ "$change" =~ ^- ]]; then
+        local val="${change#-}"
+        if command -v wpctl >/dev/null 2>&1; then
+            wpctl set-volume @DEFAULT_AUDIO_SINK@ "${val}%-"
+        elif command -v pactl >/dev/null 2>&1; then
+            pactl set-sink-volume @DEFAULT_SINK@ "-${val}%"
+        fi
+    else
+        if command -v wpctl >/dev/null 2>&1; then
+            wpctl set-volume @DEFAULT_AUDIO_SINK@ "${change}%+"
+        elif command -v pactl >/dev/null 2>&1; then
+            pactl set-sink-volume @DEFAULT_SINK@ "+${change}%"
+        fi
+    fi
+}
+driver_raw_status() {
+    if [[ -n "$RAW_PLAYER_PID" ]] && kill -0 "$RAW_PLAYER_PID" 2>/dev/null; then
+        if [[ "$RAW_PAUSE_STATE" == "true" ]]; then
+            echo "paused (PID: $RAW_PLAYER_PID)"
+        else
+            echo "playing (PID: $RAW_PLAYER_PID)"
+        fi
+        return 0
+    fi
+    echo "inactive"
+    return 1
+}
+
+# --- Included: src/backend/engine.sh ---
+engine_init() {
+    if [[ "$ACTIVE_ENGINE" == "mpv" ]]; then
+        if command -v mpv >/dev/null 2>&1; then
+            driver_mpv_init
+        else
+            echo "Warning: mpv not found. Falling back to raw mode." >&2
+            ACTIVE_ENGINE="raw"
+            driver_raw_init
+        fi
+    else
+        driver_raw_init
+    fi
+}
+cplay_play() {
+    if [[ "$ACTIVE_ENGINE" == "mpv" ]]; then
+        driver_mpv_play "$1"
+    else
+        driver_raw_play "$1"
+    fi
+}
+cplay_pause() {
+    if [[ "$ACTIVE_ENGINE" == "mpv" ]]; then
+        driver_mpv_pause_toggle
+    else
+        driver_raw_pause_toggle
+    fi
+}
+cplay_seek() {
+    if [[ "$ACTIVE_ENGINE" == "mpv" ]]; then
+        driver_mpv_seek "$1"
+    else
+        driver_raw_seek "$1"
+    fi
+}
+cplay_volume() {
+    if [[ "$ACTIVE_ENGINE" == "mpv" ]]; then
+        driver_mpv_volume "$1"
+    else
+        driver_raw_volume "$1"
+    fi
+}
+cplay_status() {
+    if [[ "$ACTIVE_ENGINE" == "mpv" ]]; then
+        driver_mpv_status
+    else
+        driver_raw_status
+    fi
+}
+cplay_mute() {
+    if [[ "$ACTIVE_ENGINE" == "mpv" ]]; then
+        if [[ "$CPLAY_MUTE_STATE" == "false" ]]; then
+            echo '{"command": ["set_property", "mute", true]}' | socat - "$MPV_SOCKET" >/dev/null 2>&1
+            CPLAY_MUTE_STATE="true"
+        else
+            echo '{"command": ["set_property", "mute", false]}' | socat - "$MPV_SOCKET" >/dev/null 2>&1
+            CPLAY_MUTE_STATE="false"
+        fi
+    else
+        if [[ "$CPLAY_MUTE_STATE" == "false" ]]; then
+            if command -v wpctl >/dev/null 2>&1; then
+                wpctl set-mute @DEFAULT_AUDIO_SINK@ 1
+            elif command -v pactl >/dev/null 2>&1; then
+                pactl set-sink-mute @DEFAULT_SINK@ toggle
+            fi
+            CPLAY_MUTE_STATE="true"
+        else
+            if command -v wpctl >/dev/null 2>&1; then
+                wpctl set-mute @DEFAULT_AUDIO_SINK@ 0
+            elif command -v pactl >/dev/null 2>&1; then
+                pactl set-sink-mute @DEFAULT_SINK@ toggle
+            fi
+            CPLAY_MUTE_STATE="false"
+        fi
+    fi
+}
+
+# --- Included: src/config/env.sh ---
+declare -g TMP="/tmp/corechunk/cplay"
+declare -g ACTIVE_ENGINE="raw"
+declare -g MPV_SOCKET="$TMP/cplay-mpv.sock"
+declare -g CPLAY_VERBOSE="false"
+declare -g CPLAY_TUI_MODE="false"
+declare -g CPLAY_CURRENT_PAGE="main"
+declare -g CPLAY_OLD_STTY=""
+declare -g CPLAY_LAUNCH_FOLDER=""
+declare -g RAW_CURRENT_FILE=""
+declare -g -i RAW_CURRENT_OFFSET=0
+declare -g RAW_PAUSE_STATE="false"
+declare -g RAW_PLAYER_PID=""
+declare -g CAVA_STATUS="inactive"
+declare -g CAVA_PID=""
+declare -g CPLAY_MUTE_STATE="false"
+
+# --- Included: src/config/keys.sh ---
+declare -g -A CPLAY_KEYS
+
+# --- Included: src/config/playlist.sh ---
+declare -g -a CPLAY_QUEUE=()
+declare -g -i CPLAY_CURRENT_INDEX=0
+declare -g -A CPLAY_SOURCES=()
+
+# --- Included: src/core/flags.sh ---
+parse_flags() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --check-imports|-c)
+                bl_import -v --strict info/diagnostics.sh
+                bl_info_check
+				read
+                exit 0
+                ;;
+            --help|-h)
+                echo "cplay - Terminal Music Player"
+                echo "Usage: cplay [options]"
+                echo ""
+                echo "Options:"
+                echo "  -h, --help           Show this help message"
+                echo "  -c, --check-imports  Run diagnostics check"
+                echo "  -m, --mode [raw|mpv] Select playback engine (default: raw)"
+                echo "  -v, --verbose        Enable verbose output during diagnostics/cleanup"
+                echo "  -f, --folder DIR     Launch with specific music folder"
+                echo "  -t, --tui            Launch in interactive raw keyboard TUI mode"
+                read
+                exit 0
+                ;;
+            --mode|-m)
+                if [[ "$2" == "mpv" || "$2" == "raw" ]]; then
+                    ACTIVE_ENGINE="$2"
+                    shift 2
+                else
+                    echo "Error: Unknown mode '$2'. Valid modes: raw, mpv" >&2
+                    exit 1
+                fi
+                ;;
+            --verbose|-v)
+                CPLAY_VERBOSE="true"
+                shift
+                ;;
+            --tui|-t)
+                CPLAY_TUI_MODE="true"
+                shift
+                ;;
+            --folder|-f)
+                if [[ -d "$2" ]]; then
+                    CPLAY_LAUNCH_FOLDER="$2"
+                else
+                    echo "Error: Launch folder '$2' is not a valid directory." >&2
+                    exit 1
+                fi
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+}
+
+# --- Included: src/core/player.sh ---
+
+# --- Included: src/core/playlist_manager.sh ---
+cplay_next() {
+    if (( ${#CPLAY_QUEUE[@]} == 0 )); then
+        return
+    fi
+    CPLAY_CURRENT_INDEX=$(( (CPLAY_CURRENT_INDEX + 1) % ${#CPLAY_QUEUE[@]} ))
+    cplay_play "${CPLAY_QUEUE[$CPLAY_CURRENT_INDEX]}"
+}
+cplay_prev() {
+    if (( ${#CPLAY_QUEUE[@]} == 0 )); then
+        return
+    fi
+    CPLAY_CURRENT_INDEX=$(( (CPLAY_CURRENT_INDEX - 1 + ${#CPLAY_QUEUE[@]}) % ${#CPLAY_QUEUE[@]} ))
+    cplay_play "${CPLAY_QUEUE[$CPLAY_CURRENT_INDEX]}"
+}
+
+# --- Included: src/core/traps.sh ---
+init(){
+	parse_flags "$@"
+	mkdir -p "$TMP"
+	echo init
+}
+deinit(){
+	if [[ -n "$CPLAY_OLD_STTY" ]]; then
+		stty "$CPLAY_OLD_STTY" 2>/dev/null
+	else
+		stty sane 2>/dev/null
+	fi
+	tput cnorm 2>/dev/null
+	trap - EXIT INT TERM
+	local -a pids_keys=("${!BL_PIDS[@]}")
+	local -i total_pids=${#pids_keys[@]}
+	local -i total_steps=$(( total_pids + 2 ))
+	local -i idx=1
+	local pb_opts=("-l" "Performing Full Cleanup")
+	if [[ "$CPLAY_VERBOSE" == "true" ]]; then
+		pb_opts+=("--status" "--log")
+	fi
+	(
+		emit_step() {
+			local label="$1"
+			local percent=$(( idx * 100 / total_steps ))
+			if [[ "$CPLAY_VERBOSE" == "true" ]]; then
+				echo "M:$label"
+				echo "L:Completed step $idx/$total_steps: $label"
+				echo "P:$percent"
+			else
+				echo "$percent"
+			fi
+			((idx++))
+			sleep 0.1
+		}
+		for key in "${pids_keys[@]}"; do
+			local pid="${BL_PIDS[$key]}"
+			if kill -0 "$pid" 2>/dev/null; then
+				kill "$pid"
+			fi
+			emit_step "Killed background $key (PID: $pid)"
+		done
+		rm -rf "$TMP"
+		emit_step "Deleted temp workspace $TMP"
+		emit_step "Terminal configuration restored"
+	) | bl_progress_bar "${pb_opts[@]}" --start "#ff00ff" --end "#0000ff"
+	exit 0
+}
+trap deinit EXIT INT TERM
+
+# --- Included: src/libs/imports.sh ---
+source <(curl -fsSL https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/import.sh)
+bl_import -v --strict ui/progress_bars.sh
+bl_import -v --strict core/colors.sh
+bl_import -v --strict async/pid.sh
+bl_import -v --strict io/*
+
+# --- Included: src/ui/menu.sh ---
+run_menu() {
+    engine_init
+    while true; do
+        clear
+        echo "============================================="
+        echo "                 cplay MENU                  "
+        echo "============================================="
+        echo "  Active Engine : $ACTIVE_ENGINE"
+        echo "  Status        : $(cplay_status)"
+        echo "  Queue size    : ${#CPLAY_QUEUE[@]} tracks"
+        if (( ${#CPLAY_QUEUE[@]} > 0 )); then
+            echo "  Playing Track : ${CPLAY_QUEUE[$CPLAY_CURRENT_INDEX]}"
+        fi
+        echo "============================================="
+        echo "  1. Add & Play a Track (File/URL)"
+        echo "  2. Pause / Resume"
+        echo "  3. Seek Forward (+10s)"
+        echo "  4. Seek Backward (-10s)"
+        echo "  5. Volume Up (+5%)"
+        echo "  6. Volume Down (-5%)"
+        echo "  7. View Queue / Playlist"
+        echo "  n. Next Track"
+        echo "  p. Previous Track"
+        echo "  i. Info (Diagnostics & System Status)"
+        echo "  x. Exit"
+        echo "============================================="
+        read -rp "  Select an option: " opt
+        case "$opt" in
+            1)
+                read -rp "  Enter Track Filepath or URL: " track
+                if [[ -n "$track" ]]; then
+                    CPLAY_QUEUE+=("$track")
+                    CPLAY_CURRENT_INDEX=$(( ${#CPLAY_QUEUE[@]} - 1 ))
+                    cplay_play "$track"
+                fi
+                ;;
+            2)
+                cplay_pause
+                ;;
+            3)
+                cplay_seek "10"
+                ;;
+            4)
+                cplay_seek "-10"
+                ;;
+            5)
+                cplay_volume "5"
+                ;;
+            6)
+                cplay_volume "-5"
+                ;;
+            7)
+                clear
+                echo "=== Queue List ==="
+                if (( ${#CPLAY_QUEUE[@]} == 0 )); then
+                    echo "  Queue is empty."
+                else
+                    for idx in "${!CPLAY_QUEUE[@]}"; do
+                        if (( idx == CPLAY_CURRENT_INDEX )); then
+                            echo "  > [$idx] ${CPLAY_QUEUE[$idx]} (current)"
+                        else
+                            echo "    [$idx] ${CPLAY_QUEUE[$idx]}"
+                        fi
+                    done
+                fi
+                echo "=================="
+                read -rp "  Press Enter to return to menu..."
+                ;;
+            n|N)
+                cplay_next
+                ;;
+            p|P)
+                cplay_prev
+                ;;
+            i|I)
+                clear
+                echo "=== cplay Diagnostics & System Status ==="
+                echo "  Active Engine   : $ACTIVE_ENGINE"
+                echo "  MPV Status      : $(driver_mpv_status 2>/dev/null || echo 'not running')"
+                echo "  Raw Player PID  : $RAW_PLAYER_PID"
+                echo "  Raw Status      : $(driver_raw_status 2>/dev/null || echo 'not running')"
+                echo "  Cava Status     : $CAVA_STATUS (PID: $CAVA_PID)"
+                echo "  Queue Size      : ${#CPLAY_QUEUE[@]}"
+                echo "  Current Index   : $CPLAY_CURRENT_INDEX"
+                echo "========================================="
+                read -rp "  Press Enter to return to menu..."
+                ;;
+            x|X)
+                exit 0
+                ;;
+            *)
+                echo "  Invalid option, try again."
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# --- Included: src/ui/tui.sh ---
+tui_draw_header() {
+    clear
+    local y="${BL_YELLOW}"
+    local c="${BL_SKY_BLUE}"
+    local r="${BL_RESET}"
+    echo -e "${y}=================================================${r}"
+    echo -e "${y}            cplay INTERACTIVE TUI MODE           ${r}"
+    echo -e "${y}=================================================${r}"
+    echo -e "  [${c}Space${r}] Play/Pause  |  [${c}Arrows${r}] Volume & Seek  "
+    echo -e "  [${c}n${r} / ${c}Ctrl+Right${r}] Next  |  [${c}b${r} / ${c}Ctrl+Left${r}] Prev "
+    echo -e "  [${c}i${r}] Diagnostics Info   |  [${c}q${r}] View Playlist    "
+    echo -e "  [${c}1${r}] Add & Play Track   |  [${c}2${r}] Add Music Source "
+    echo -e "  [${c}l${r}] View Source Stats  |  [${c}Ctrl + Shift + C${r}] Exit"
+    echo -e "${y}=================================================${r}"
+}
+tui_draw_info() {
+    clear
+    local y="${BL_YELLOW}"
+    local g="${BL_GREEN}"
+    local red="${BL_RED}"
+    local c="${BL_SKY_BLUE}"
+    local r="${BL_RESET}"
+    local mpv_raw
+    mpv_raw=$(driver_mpv_status 2>/dev/null || echo "not running")
+    local raw_raw
+    raw_raw=$(driver_raw_status 2>/dev/null || echo "not running")
+    local mpv_color="$red"
+    if [[ "$mpv_raw" == "active" ]]; then
+        mpv_color="$g"
+    fi
+    local raw_color="$red"
+    if [[ "$raw_raw" == *"playing"* ]]; then
+        raw_color="$g"
+    elif [[ "$raw_raw" == *"paused"* ]]; then
+        raw_color="$y"
+    fi
+    local cava_color="$red"
+    if [[ "$CAVA_STATUS" == "active" ]]; then
+        cava_color="$g"
+    fi
+    echo -e "${y}=== cplay Diagnostics & System Status ===${r}"
+    echo -e "  Active Engine   : ${c}${ACTIVE_ENGINE}${r}"
+    echo -e "  MPV Status      : ${mpv_color}${mpv_raw}${r}"
+    echo -e "  Raw Player PID  : ${c}${RAW_PLAYER_PID}${r}"
+    echo -e "  Raw Status      : ${raw_color}${raw_raw}${r}"
+    echo -e "  Cava Status     : ${cava_color}${CAVA_STATUS}${r} (PID: ${c}${CAVA_PID}${r})"
+    echo -e "  Queue Size      : ${c}${#CPLAY_QUEUE[@]}${r}"
+    echo -e "  Current Index   : ${c}${CPLAY_CURRENT_INDEX}${r}"
+    echo -e "${y}=========================================${r}"
+    echo -e "  Press Esc or Ctrl+C to return to main menu..."
+}
+tui_draw_queue() {
+    clear
+    echo "=== cplay Playlist Queue ==="
+    if (( ${#CPLAY_QUEUE[@]} == 0 )); then
+        echo "  Queue is empty."
+    else
+        for idx in "${!CPLAY_QUEUE[@]}"; do
+            if (( idx == CPLAY_CURRENT_INDEX )); then
+                echo "  > [$idx] ${CPLAY_QUEUE[$idx]}"
+            else
+                echo "    [$idx] ${CPLAY_QUEUE[$idx]}"
+            fi
+        done
+    fi
+    echo "============================"
+    echo "  Press any key to return to main menu..."
+}
+tui_scan_recursive() {
+    local target="$1"
+    local indent="$2"
+    for item in "$target"/*; do
+        [[ -e "$item" ]] || continue
+        local base
+        base=$(basename "$item")
+        if [[ -d "$item" ]]; then
+            echo "${indent}[directory] $base"
+            tui_scan_recursive "$item" "  $indent"
+        elif [[ -f "$item" ]]; then
+            echo "${indent}[file] $base"
+        else
+            echo "${indent}[unknown] $base"
+        fi
+    done
+}
+declare -g -a CPLAY_STATS_ITEMS=()
+declare -g -A CPLAY_STATS_META=()
+declare -g -A CPLAY_STATS_EXPANDED=()
+declare -g CPLAY_STATS_SORT_DIR="asc"
+declare -g -i CPLAY_STATS_SELECT_IDX=0
+declare -g -i CPLAY_STATS_SCROLL_OFFSET=0
+tui_collect_items() {
+    CPLAY_STATS_ITEMS=()
+    local -a roots=()
+    for root in "${!CPLAY_SOURCES[@]}"; do
+        if [[ -d "$root" ]]; then
+            roots+=("$root")
+        fi
+    done
+    if [[ "$CPLAY_STATS_SORT_DIR" == "asc" ]]; then
+        IFS=$'\n' roots=($(sort <<<"${roots[*]}")); unset IFS
+    elif [[ "$CPLAY_STATS_SORT_DIR" == "desc" ]]; then
+        IFS=$'\n' roots=($(sort -r <<<"${roots[*]}")); unset IFS
+    fi
+    for root in "${roots[@]}"; do
+        CPLAY_STATS_META["$root"]="0|directory|$(basename "$root")|"
+        CPLAY_STATS_ITEMS+=("$root")
+        if [[ "${CPLAY_STATS_EXPANDED["$root"]}" == "true" ]]; then
+            tui_collect_subdir_items "$root" 1
+        fi
+    done
+}
+tui_collect_subdir_items() {
+    local parent="$1"
+    local -i indent=$2
+    local -a contents=()
+    for item in "$parent"/*; do
+        [[ -e "$item" ]] || continue
+        contents+=("$item")
+    done
+    if [[ "$CPLAY_STATS_SORT_DIR" == "asc" ]]; then
+        IFS=$'\n' contents=($(sort <<<"${contents[*]}")); unset IFS
+    elif [[ "$CPLAY_STATS_SORT_DIR" == "desc" ]]; then
+        IFS=$'\n' contents=($(sort -r <<<"${contents[*]}")); unset IFS
+    fi
+    for item in "${contents[@]}"; do
+        local type="unknown"
+        if [[ -d "$item" ]]; then
+            type="directory"
+        elif [[ -f "$item" ]]; then
+            type="file"
+        fi
+        CPLAY_STATS_META["$item"]="$indent|$type|$(basename "$item")|$parent"
+        CPLAY_STATS_ITEMS+=("$item")
+        if [[ "$type" == "directory" && "${CPLAY_STATS_EXPANDED["$item"]}" == "true" ]]; then
+            tui_collect_subdir_items "$item" $((indent + 1))
+        fi
+    done
+}
+tui_get_queue_status() {
+    local path="$1"
+    local type="$2"
+    if [[ "$type" == "file" ]]; then
+        for item in "${CPLAY_QUEUE[@]}"; do
+            if [[ "$item" == "$path" ]]; then
+                echo "(*)"
+                return
+            fi
+        done
+        echo "( )"
+        return
+    fi
+    local -a files=()
+    tui_gather_files() {
+        local dir="$1"
+        for item in "$dir"/*; do
+            [[ -e "$item" ]] || continue
+            if [[ -f "$item" ]]; then
+                files+=("$item")
+            elif [[ -d "$item" ]]; then
+                tui_gather_files "$item"
+            fi
+        done
+    }
+    tui_gather_files "$path"
+    local total=${#files[@]}
+    if (( total == 0 )); then
+        echo "( )"
+        return
+    fi
+    local matched=0
+    for f in "${files[@]}"; do
+        for item in "${CPLAY_QUEUE[@]}"; do
+            if [[ "$item" == "$f" ]]; then
+                ((matched++))
+                break
+            fi
+        done
+    done
+    if (( matched == 0 )); then
+        echo "( )"
+    elif (( matched == total )); then
+        echo "(*)"
+    else
+        echo "(-)"
+    fi
+}
+tui_toggle_queue() {
+    local path="$1"
+    local type="$2"
+    local -a files=()
+    if [[ "$type" == "file" ]]; then
+        files+=("$path")
+    else
+        tui_gather_files() {
+            local dir="$1"
+            for item in "$dir"/*; do
+                [[ -e "$item" ]] || continue
+                if [[ -f "$item" ]]; then
+                    files+=("$item")
+                elif [[ -d "$item" ]]; then
+                    tui_gather_files "$item"
+                fi
+            done
+        }
+        tui_gather_files "$path"
+    fi
+    local all_queued=true
+    for f in "${files[@]}"; do
+        local found=false
+        for item in "${CPLAY_QUEUE[@]}"; do
+            if [[ "$item" == "$f" ]]; then
+                found=true
+                break
+            fi
+        done
+        if [[ "$found" == "false" ]]; then
+            all_queued=false
+            break
+        fi
+    done
+    local q_was_empty=false
+    if (( ${#CPLAY_QUEUE[@]} == 0 )); then
+        q_was_empty=true
+    fi
+    if [[ "$all_queued" == "true" ]]; then
+        local -a new_queue=()
+        for item in "${CPLAY_QUEUE[@]}"; do
+            local keep=true
+            for f in "${files[@]}"; do
+                if [[ "$item" == "$f" ]]; then
+                    keep=false
+                    break
+                fi
+            done
+            if [[ "$keep" == "true" ]]; then
+                new_queue+=("$item")
+            fi
+        done
+        CPLAY_QUEUE=("${new_queue[@]}")
+    else
+        for f in "${files[@]}"; do
+            local found=false
+            for item in "${CPLAY_QUEUE[@]}"; do
+                if [[ "$item" == "$f" ]]; then
+                    found=true
+                    break
+                fi
+            done
+            if [[ "$found" == "false" ]]; then
+                CPLAY_QUEUE+=("$f")
+            fi
+        done
+    fi
+    if [[ "$q_was_empty" == "true" && ${#CPLAY_QUEUE[@]} -gt 0 ]]; then
+        CPLAY_CURRENT_INDEX=0
+        cplay_play "${CPLAY_QUEUE[0]}"
+    fi
+}
+tui_scan_recursive() {
+    local target="$1"
+    local indent="$2"
+    for item in "$target"/*; do
+        [[ -e "$item" ]] || continue
+        local base="${item##*/}"
+        if [[ -d "$item" ]]; then
+            echo "${indent}[directory] $base"
+            tui_scan_recursive "$item" "  $indent"
+        elif [[ -f "$item" ]]; then
+            echo "${indent}[file] $base"
+        else
+            echo "${indent}[unknown] $base"
+        fi
+    done
+}
+declare -g -a CPLAY_STATS_ITEMS=()
+declare -g -A CPLAY_STATS_META=()
+declare -g -A CPLAY_STATS_EXPANDED=()
+declare -g CPLAY_STATS_SORT_DIR="asc"
+declare -g -i CPLAY_STATS_SELECT_IDX=0
+declare -g -i CPLAY_STATS_SCROLL_OFFSET=0
+declare -g -i CPLAY_QUEUE_SELECT_IDX=0
+declare -g -i CPLAY_QUEUE_SCROLL_OFFSET=0
+tui_collect_items() {
+    CPLAY_STATS_ITEMS=()
+    local -a roots=()
+    for root in "${!CPLAY_SOURCES[@]}"; do
+        if [[ -d "$root" ]]; then
+            roots+=("$root")
+        fi
+    done
+    if [[ "$CPLAY_STATS_SORT_DIR" == "asc" ]]; then
+        IFS=$'\n' roots=($(sort <<<"${roots[*]}")); unset IFS
+    elif [[ "$CPLAY_STATS_SORT_DIR" == "desc" ]]; then
+        IFS=$'\n' roots=($(sort -r <<<"${roots[*]}")); unset IFS
+    fi
+    for root in "${roots[@]}"; do
+        CPLAY_STATS_META["$root"]="0|directory|${root##*/}|"
+        CPLAY_STATS_ITEMS+=("$root")
+        if [[ "${CPLAY_STATS_EXPANDED["$root"]}" == "true" ]]; then
+            tui_collect_subdir_items "$root" 1
+        fi
+    done
+}
+tui_collect_subdir_items() {
+    local parent="$1"
+    local -i indent=$2
+    local -a contents=()
+    for item in "$parent"/*; do
+        [[ -e "$item" ]] || continue
+        contents+=("$item")
+    done
+    if [[ "$CPLAY_STATS_SORT_DIR" == "asc" ]]; then
+        IFS=$'\n' contents=($(sort <<<"${contents[*]}")); unset IFS
+    elif [[ "$CPLAY_STATS_SORT_DIR" == "desc" ]]; then
+        IFS=$'\n' contents=($(sort -r <<<"${contents[*]}")); unset IFS
+    fi
+    for item in "${contents[@]}"; do
+        local type="unknown"
+        if [[ -d "$item" ]]; then
+            type="directory"
+        elif [[ -f "$item" ]]; then
+            type="file"
+        fi
+        CPLAY_STATS_META["$item"]="$indent|$type|${item##*/}|$parent"
+        CPLAY_STATS_ITEMS+=("$item")
+        if [[ "$type" == "directory" && "${CPLAY_STATS_EXPANDED["$item"]}" == "true" ]]; then
+            tui_collect_subdir_items "$item" $((indent + 1))
+        fi
+    done
+}
+tui_get_queue_status() {
+    local path="$1"
+    local type="$2"
+    if [[ "$type" == "file" ]]; then
+        for item in "${CPLAY_QUEUE[@]}"; do
+            if [[ "$item" == "$path" ]]; then
+                echo "(*)"
+                return
+            fi
+        done
+        echo "( )"
+        return
+    fi
+    local -a files=()
+    tui_gather_files() {
+        local dir="$1"
+        for item in "$dir"/*; do
+            [[ -e "$item" ]] || continue
+            if [[ -f "$item" ]]; then
+                files+=("$item")
+            elif [[ -d "$item" ]]; then
+                tui_gather_files "$item"
+            fi
+        done
+    }
+    tui_gather_files "$path"
+    local total=${#files[@]}
+    if (( total == 0 )); then
+        echo "( )"
+        return
+    fi
+    local matched=0
+    for f in "${files[@]}"; do
+        for item in "${CPLAY_QUEUE[@]}"; do
+            if [[ "$item" == "$f" ]]; then
+                ((matched++))
+                break
+            fi
+        done
+    done
+    if (( matched == 0 )); then
+        echo "( )"
+    elif (( matched == total )); then
+        echo "(*)"
+    else
+        echo "(-)"
+    fi
+}
+tui_toggle_queue() {
+    local path="$1"
+    local type="$2"
+    local -a files=()
+    if [[ "$type" == "file" ]]; then
+        files+=("$path")
+    else
+        tui_gather_files() {
+            local dir="$1"
+            for item in "$dir"/*; do
+                [[ -e "$item" ]] || continue
+                if [[ -f "$item" ]]; then
+                    files+=("$item")
+                elif [[ -d "$item" ]]; then
+                    tui_gather_files "$item"
+                fi
+            done
+        }
+        tui_gather_files "$path"
+    fi
+    local all_queued=true
+    for f in "${files[@]}"; do
+        local found=false
+        for item in "${CPLAY_QUEUE[@]}"; do
+            if [[ "$item" == "$f" ]]; then
+                found=true
+                break
+            fi
+        done
+        if [[ "$found" == "false" ]]; then
+            all_queued=false
+            break
+        fi
+    done
+    local q_was_empty=false
+    if (( ${#CPLAY_QUEUE[@]} == 0 )); then
+        q_was_empty=true
+    fi
+    if [[ "$all_queued" == "true" ]]; then
+        local -a new_queue=()
+        for item in "${CPLAY_QUEUE[@]}"; do
+            local keep=true
+            for f in "${files[@]}"; do
+                if [[ "$item" == "$f" ]]; then
+                    keep=false
+                    break
+                fi
+            done
+            if [[ "$keep" == "true" ]]; then
+                new_queue+=("$item")
+            fi
+        done
+        CPLAY_QUEUE=("${new_queue[@]}")
+    else
+        for f in "${files[@]}"; do
+            local found=false
+            for item in "${CPLAY_QUEUE[@]}"; do
+                if [[ "$item" == "$f" ]]; then
+                    found=true
+                    break
+                fi
+            done
+            if [[ "$found" == "false" ]]; then
+                CPLAY_QUEUE+=("$f")
+            fi
+        done
+    fi
+    if [[ "$q_was_empty" == "true" && ${#CPLAY_QUEUE[@]} -gt 0 ]]; then
+        CPLAY_CURRENT_INDEX=0
+        cplay_play "${CPLAY_QUEUE[0]}"
+    fi
+}
+tui_show_source_stats() {
+    tput cup 0 0
+    tui_collect_items
+    local num_items=${#CPLAY_STATS_ITEMS[@]}
+    local max_lines=15
+    local y="${BL_YELLOW}"
+    local g="${BL_GREEN}"
+    local c="${BL_SKY_BLUE}"
+    local r="${BL_RESET}"
+    local select_bg="\e[106m\e[30m"
+    if (( CPLAY_STATS_SELECT_IDX < 0 )); then
+        CPLAY_STATS_SELECT_IDX=0
+    fi
+    if (( num_items > 0 && CPLAY_STATS_SELECT_IDX >= num_items )); then
+        CPLAY_STATS_SELECT_IDX=$((num_items - 1))
+    fi
+    if (( CPLAY_STATS_SELECT_IDX < CPLAY_STATS_SCROLL_OFFSET )); then
+        CPLAY_STATS_SCROLL_OFFSET=$CPLAY_STATS_SELECT_IDX
+    elif (( CPLAY_STATS_SELECT_IDX >= CPLAY_STATS_SCROLL_OFFSET + max_lines )); then
+        CPLAY_STATS_SCROLL_OFFSET=$(( CPLAY_STATS_SELECT_IDX - max_lines + 1 ))
+    fi
+    local buf=""
+    buf+="${y}=== Source Directories Stats Listing ===${r}\n"
+    buf+="  [Arrow Up/Down] Select | [Arrow Left/Right] Fold/Unfold\n"
+    buf+="  [Space/Enter] Toggle Queue | [Ctrl+S] Sort: $CPLAY_STATS_SORT_DIR\n"
+    buf+="${y}=========================================${r}\n"
+    if (( num_items == 0 )); then
+        buf+="  No music source folders registered.\e[K\n"
+        buf+="  (Press '2' in the main menu to add a source folder).\e[K\n"
+        buf+="${y}=========================================${r}\e[K\n"
+        buf+="  Press Esc or Ctrl+C to return to main menu...\e[K\n"
+        printf "%b" "$buf"
+        return
+    fi
+    local end_idx=$(( CPLAY_STATS_SCROLL_OFFSET + max_lines ))
+    if (( end_idx > num_items )); then
+        end_idx=$num_items
+    fi
+    for (( i=CPLAY_STATS_SCROLL_OFFSET; i<end_idx; i++ )); do
+        local path="${CPLAY_STATS_ITEMS[$i]}"
+        local meta="${CPLAY_STATS_META["$path"]}"
+        IFS='|' read -r indent type name parent <<< "$meta"
+        local indent_str=""
+        for (( j=0; j<indent; j++ )); do
+            indent_str="  $indent_str"
+        done
+        local prefix="  "
+        if (( i == CPLAY_STATS_SELECT_IDX )); then
+            prefix="> "
+        fi
+        local exp_indicator="     "
+        local type_str=""
+        if [[ "$type" == "directory" ]]; then
+            if [[ "${CPLAY_STATS_EXPANDED["$path"]}" == "true" ]]; then
+                exp_indicator="${g}[-]${r}  "
+            else
+                exp_indicator="${y}[+]${r}  "
+            fi
+            type_str="${y}[ DIR ]${r}"
+        else
+            type_str="${c}[FILE]${r} "
+        fi
+        local q_status
+        q_status=$(tui_get_queue_status "$path" "$type")
+        local q_colored=""
+        case "$q_status" in
+            "(*)") q_colored="${g}(*)${r}" ;;
+            "(-)") q_colored="${y}(-)${r}" ;;
+            "( )") q_colored="( )" ;;
+        esac
+        if (( i == CPLAY_STATS_SELECT_IDX )); then
+            local plain_exp="     "
+            if [[ "$type" == "directory" ]]; then
+                if [[ "${CPLAY_STATS_EXPANDED["$path"]}" == "true" ]]; then
+                    plain_exp="[-]  "
+                else
+                    plain_exp="[+]  "
+                fi
+            fi
+            local plain_type="[FILE] "
+            if [[ "$type" == "directory" ]]; then
+                plain_type="[ DIR ]"
+            fi
+            buf+="${select_bg}${prefix}${indent_str}${plain_exp}${plain_type} ${q_status} ${name}${r}\e[K\n"
+        else
+            buf+="${prefix}${indent_str}${exp_indicator}${type_str} ${q_colored} ${name}\e[K\n"
+        fi
+    done
+    buf+="${y}=========================================${r}\e[K\n"
+    buf+="  Item $(( CPLAY_STATS_SELECT_IDX + 1 )) of $num_items | Queue Size: ${#CPLAY_QUEUE[@]}\e[K\n"
+    printf "%b" "$buf"
+}
+tui_draw_queue() {
+    tput cup 0 0
+    local num_items=${#CPLAY_QUEUE[@]}
+    local max_lines=15
+    local y="${BL_YELLOW}"
+    local g="${BL_GREEN}"
+    local c="${BL_SKY_BLUE}"
+    local r="${BL_RESET}"
+    local select_bg="\e[106m\e[30m"
+    if (( CPLAY_QUEUE_SELECT_IDX < 0 )); then
+        CPLAY_QUEUE_SELECT_IDX=0
+    fi
+    if (( num_items > 0 && CPLAY_QUEUE_SELECT_IDX >= num_items )); then
+        CPLAY_QUEUE_SELECT_IDX=$((num_items - 1))
+    fi
+    if (( CPLAY_QUEUE_SELECT_IDX < CPLAY_QUEUE_SCROLL_OFFSET )); then
+        CPLAY_QUEUE_SCROLL_OFFSET=$CPLAY_QUEUE_SELECT_IDX
+    elif (( CPLAY_QUEUE_SELECT_IDX >= CPLAY_QUEUE_SCROLL_OFFSET + max_lines )); then
+        CPLAY_QUEUE_SCROLL_OFFSET=$(( CPLAY_QUEUE_SELECT_IDX - max_lines + 1 ))
+    fi
+    local buf=""
+    buf+="${y}=== cplay Playlist Queue ===${r}\n"
+    buf+="  [Arrow Up/Down] Select Track | [Space/Enter] Play Selection\n"
+    buf+="  [Esc / Ctrl+C] Back to Main Menu\n"
+    buf+="${y}============================${r}\n"
+    if (( num_items == 0 )); then
+        buf+="  Queue is empty.\e[K\n"
+    else
+        local end_idx=$(( CPLAY_QUEUE_SCROLL_OFFSET + max_lines ))
+        if (( end_idx > num_items )); then
+            end_idx=$num_items
+        fi
+        for (( i=CPLAY_QUEUE_SCROLL_OFFSET; i<end_idx; i++ )); do
+            local track_path="${CPLAY_QUEUE[$i]}"
+            local base="${track_path##*/}"
+            local play_indicator="  "
+            local color_start=""
+            local color_end=""
+            if (( i == CPLAY_CURRENT_INDEX )); then
+                play_indicator="* "
+                color_start="${g}"
+                color_end="${r}"
+            fi
+            if (( i == CPLAY_QUEUE_SELECT_IDX )); then
+                buf+="${select_bg}${play_indicator}[$((i + 1))] ${base}${r}\e[K\n"
+            else
+                buf+="${play_indicator}${color_start}[$((i + 1))] ${base}${color_end}\e[K\n"
+            fi
+        done
+    fi
+    buf+="${y}============================${r}\e[K\n"
+    buf+="  Item $(( CPLAY_QUEUE_SELECT_IDX + 1 )) of $num_items\e[K\n"
+    printf "%b" "$buf"
+}
+run_tui() {
+    engine_init
+    local launch_dir="$HOME/Music"
+    if [[ -n "$CPLAY_LAUNCH_FOLDER" && -d "$CPLAY_LAUNCH_FOLDER" ]]; then
+        launch_dir="$CPLAY_LAUNCH_FOLDER"
+    fi
+    if [[ -d "$launch_dir" ]]; then
+        CPLAY_SOURCES["$launch_dir"]="active"
+    fi
+    CPLAY_OLD_STTY=$(stty -g)
+    stty -icanon -echo -isig
+    tput civis
+    CPLAY_CURRENT_PAGE="main"
+    tui_draw_header
+    while true; do
+        if [[ "$CPLAY_CURRENT_PAGE" == "main" ]]; then
+            tput cup 8 0
+            echo -ne "\r  Active Engine: \e[32m$ACTIVE_ENGINE\e[0m | Status: \e[34m$(cplay_status)\e[0m\e[K"
+            if (( ${#CPLAY_QUEUE[@]} > 0 )); then
+                tput cup 9 0
+                local playing_name="${CPLAY_QUEUE[$CPLAY_CURRENT_INDEX]}"
+                playing_name="${playing_name##*/}"
+                echo -ne "\r  Playing [$((CPLAY_CURRENT_INDEX + 1))/${#CPLAY_QUEUE[@]}]: \e[36m${playing_name}\e[0m\e[K"
+            fi
+        fi
+        local key=""
+        if ! IFS= read -rn1 -t 0.2 key; then
+            if ! kill -0 "$RAW_PLAYER_PID" 2>/dev/null; then
+                if [[ "$RAW_PAUSE_STATE" == "false" && ${#CPLAY_QUEUE[@]} -gt 0 ]]; then
+                    cplay_next
+                fi
+            fi
+            continue
+        fi
+        case "$key" in
+            "n"|"N")
+                cplay_next
+                if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                    tui_show_source_stats
+                elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
+                    tui_draw_queue
+                elif [[ "$CPLAY_CURRENT_PAGE" == "main" ]]; then
+                    tui_draw_header
+                fi
+                continue
+                ;;
+            "b"|"B")
+                cplay_prev
+                if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                    tui_show_source_stats
+                elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
+                    tui_draw_queue
+                elif [[ "$CPLAY_CURRENT_PAGE" == "main" ]]; then
+                    tui_draw_header
+                fi
+                continue
+                ;;
+            "m"|"M")
+                cplay_mute
+                if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                    tui_show_source_stats
+                elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
+                    tui_draw_queue
+                elif [[ "$CPLAY_CURRENT_PAGE" == "main" ]]; then
+                    tui_draw_header
+                fi
+                continue
+                ;;
+            "1")
+                stty "$CPLAY_OLD_STTY"
+                tput cnorm
+                clear
+                echo "=== cplay TUI Add Track ==="
+                read -rp "  Enter Track Filepath or URL: " track
+                if [[ -n "$track" ]]; then
+                    CPLAY_QUEUE+=("$track")
+                    CPLAY_CURRENT_INDEX=$(( ${#CPLAY_QUEUE[@]} - 1 ))
+                    cplay_play "$track"
+                fi
+                stty -icanon -echo -isig
+                tput civis
+                CPLAY_CURRENT_PAGE="main"
+                tui_draw_header
+                continue
+                ;;
+            "2")
+                stty "$CPLAY_OLD_STTY"
+                tput cnorm
+                clear
+                echo "=== cplay TUI Add Music Source Directory ==="
+                read -rp "  Enter Directory Path: " dir_path
+                if [[ -n "$dir_path" ]]; then
+                    if [[ -d "$dir_path" ]]; then
+                        CPLAY_SOURCES["$dir_path"]="active"
+                        echo "  [Success] Added source folder: $dir_path"
+                    else
+                        echo "  [Error] Path is not a valid directory: $dir_path"
+                    fi
+                    sleep 1.5
+                fi
+                stty -icanon -echo -isig
+                tput civis
+                CPLAY_CURRENT_PAGE="main"
+                tui_draw_header
+                continue
+                ;;
+            "i"|"I")
+                CPLAY_CURRENT_PAGE="info"
+                tui_draw_info
+                continue
+                ;;
+            "q"|"Q")
+                CPLAY_CURRENT_PAGE="queue"
+                tui_draw_queue
+                continue
+                ;;
+            "l"|"L")
+                CPLAY_CURRENT_PAGE="stats"
+                tui_show_source_stats
+                continue
+                ;;
+            $'\x03')
+                break
+                ;;
+        esac
+        if [[ "$CPLAY_CURRENT_PAGE" != "main" ]]; then
+            if [[ "$key" == " " || "$key" == "" || "$key" == $'\n' || "$key" == $'\r' ]]; then
+                if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                    local target_path="${CPLAY_STATS_ITEMS[$CPLAY_STATS_SELECT_IDX]}"
+                    local meta="${CPLAY_STATS_META["$target_path"]}"
+                    IFS='|' read -r indent type name parent <<< "$meta"
+                    tui_toggle_queue "$target_path" "$type"
+                    tui_show_source_stats
+                    continue
+                elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
+                    if (( ${#CPLAY_QUEUE[@]} > 0 )); then
+                        CPLAY_CURRENT_INDEX=$CPLAY_QUEUE_SELECT_IDX
+                        cplay_play "${CPLAY_QUEUE[$CPLAY_CURRENT_INDEX]}"
+                        tui_draw_queue
+                    fi
+                    continue
+                fi
+            fi
+            if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                if [[ "$key" == $'\x13' || "$key" == "s" || "$key" == "S" ]]; then
+                    if [[ "$CPLAY_STATS_SORT_DIR" == "asc" ]]; then
+                        CPLAY_STATS_SORT_DIR="desc"
+                    else
+                        CPLAY_STATS_SORT_DIR="asc"
+                    fi
+                    tui_show_source_stats
+                    continue
+                fi
+            fi
+            if [[ "$key" == $'\x03' ]]; then
+                CPLAY_CURRENT_PAGE="main"
+                tui_draw_header
+                continue
+            fi
+            if [[ "$key" == $'\e' ]]; then
+                local next1=""
+                local next2=""
+                if ! read -rn1 -t 0.03 next1; then
+                    CPLAY_CURRENT_PAGE="main"
+                    tui_draw_header
+                    continue
+                fi
+                if [[ "$next1" == "O" ]]; then
+                    read -rn1 -t 0.05 next2
+                    case "$next2" in
+                        "P") CPLAY_CURRENT_PAGE="main"; tui_draw_header; continue ;;
+                        "Q") CPLAY_CURRENT_PAGE="stats"; tui_show_source_stats; continue ;;
+                        "R") CPLAY_CURRENT_PAGE="queue"; tui_draw_queue; continue ;;
+                        "S") CPLAY_CURRENT_PAGE="info"; tui_draw_info; continue ;;
+                    esac
+                fi
+                if [[ "$next1" == " " ]]; then
+                    cplay_pause
+                    if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                        tui_show_source_stats
+                    elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
+                        tui_draw_queue
+                    fi
+                    continue
+                elif [[ "$next1" == "[" ]]; then
+                    read -rn1 -t 0.05 next2
+                    if [[ "$next2" == "1" ]]; then
+                        local next3=""
+                        local next4=""
+                        read -rn1 -t 0.05 next3
+                        read -rn1 -t 0.05 next4
+                        if [[ "$next3" == "5" && "$next4" == "~" ]]; then
+                            CPLAY_CURRENT_PAGE="help"
+                            tui_draw_help
+                            continue
+                        elif [[ "$next3" == "1" && "$next4" == "~" ]]; then
+                            CPLAY_CURRENT_PAGE="main"; tui_draw_header; continue
+                        elif [[ "$next3" == "2" && "$next4" == "~" ]]; then
+                            CPLAY_CURRENT_PAGE="stats"; tui_show_source_stats; continue
+                        elif [[ "$next3" == "3" && "$next4" == "~" ]]; then
+                            CPLAY_CURRENT_PAGE="queue"; tui_draw_queue; continue
+                        elif [[ "$next3" == "4" && "$next4" == "~" ]]; then
+                            CPLAY_CURRENT_PAGE="info"; tui_draw_info; continue
+                        fi
+                        if [[ "$next3" == ";" ]]; then
+                            local next5=""
+                            local next6=""
+                            read -rn1 -t 0.05 next5
+                            read -rn1 -t 0.05 next6
+                            if [[ "$next5" == "3" ]]; then
+                                case "$next6" in
+                                    "A") cplay_volume "5" ;;
+                                    "B") cplay_volume "-5" ;;
+                                    "C") cplay_seek "10" ;;
+                                    "D") cplay_seek "-10" ;;
+                                esac
+                                if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                                    tui_show_source_stats
+                                elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
+                                    tui_draw_queue
+                                fi
+                                continue
+                            elif [[ "$next5" == "5" ]]; then
+                                if [[ "$next6" == "C" ]]; then
+                                    cplay_next
+                                elif [[ "$next6" == "D" ]]; then
+                                    cplay_prev
+                                fi
+                                if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                                    tui_show_source_stats
+                                elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
+                                    tui_draw_queue
+                                fi
+                                continue
+                            fi
+                        fi
+                    fi
+                    if [[ "$next2" == "A" ]]; then # Plain Arrow Up
+                        if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                            if (( CPLAY_STATS_SELECT_IDX > 0 )); then
+                                CPLAY_STATS_SELECT_IDX=$((CPLAY_STATS_SELECT_IDX - 1))
+                            fi
+                            tui_show_source_stats
+                        elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
+                            if (( CPLAY_QUEUE_SELECT_IDX > 0 )); then
+                                CPLAY_QUEUE_SELECT_IDX=$((CPLAY_QUEUE_SELECT_IDX - 1))
+                            fi
+                            tui_draw_queue
+                        fi
+                        continue
+                    elif [[ "$next2" == "B" ]]; then # Plain Arrow Down
+                        if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                            if (( CPLAY_STATS_SELECT_IDX < ${#CPLAY_STATS_ITEMS[@]} - 1 )); then
+                                CPLAY_STATS_SELECT_IDX=$((CPLAY_STATS_SELECT_IDX + 1))
+                            fi
+                            tui_show_source_stats
+                        elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
+                            if (( CPLAY_QUEUE_SELECT_IDX < ${#CPLAY_QUEUE[@]} - 1 )); then
+                                CPLAY_QUEUE_SELECT_IDX=$((CPLAY_QUEUE_SELECT_IDX + 1))
+                            fi
+                            tui_draw_queue
+                        fi
+                        continue
+                    elif [[ "$next2" == "C" ]]; then # Plain Arrow Right
+                        if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                            local target_path="${CPLAY_STATS_ITEMS[$CPLAY_STATS_SELECT_IDX]}"
+                            local meta="${CPLAY_STATS_META["$target_path"]}"
+                            IFS='|' read -r indent type name parent <<< "$meta"
+                            if [[ "$type" == "directory" ]]; then
+                                CPLAY_STATS_EXPANDED["$target_path"]="true"
+                            fi
+                            tui_show_source_stats
+                        fi
+                        continue
+                    elif [[ "$next2" == "D" ]]; then # Plain Arrow Left
+                        if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                            local target_path="${CPLAY_STATS_ITEMS[$CPLAY_STATS_SELECT_IDX]}"
+                            local meta="${CPLAY_STATS_META["$target_path"]}"
+                            IFS='|' read -r indent type name parent <<< "$meta"
+                            if [[ "$type" == "directory" ]]; then
+                                CPLAY_STATS_EXPANDED["$target_path"]="false"
+                            fi
+                            tui_show_source_stats
+                        fi
+                        continue
+                    fi
+                elif [[ "$next1" == $'\e' ]]; then
+                    local next3=""
+                    read -rn1 -t 0.05 next3
+                    if [[ "$next3" == "[" ]]; then
+                        local next4=""
+                        read -rn1 -t 0.05 next4
+                        case "$next4" in
+                            "A") cplay_volume "5" ;;
+                            "B") cplay_volume "-5" ;;
+                            "C") cplay_seek "10" ;;
+                            "D") cplay_seek "-10" ;;
+                        esac
+                        if [[ "$CPLAY_CURRENT_PAGE" == "stats" ]]; then
+                            tui_show_source_stats
+                        elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
+                            tui_draw_queue
+                        fi
+                        continue
+                    fi
+                fi
+            fi
+            continue
+        fi
+        case "$key" in
+            " ") # Spacebar pause/play toggle globally on main page
+                cplay_pause
+                continue
+                ;;
+            $'\e') # Escape Sequence (Arrows, Ctrl+Arrows, F-keys) for main page
+                local next1=""
+                local next2=""
+                read -rn1 -t 0.05 next1
+                read -rn1 -t 0.05 next2
+                if [[ "$next1" == "O" ]]; then
+                    case "$next2" in
+                        "P") CPLAY_CURRENT_PAGE="main"; tui_draw_header; continue ;;
+                        "Q") CPLAY_CURRENT_PAGE="stats"; tui_show_source_stats; continue ;;
+                        "R") CPLAY_CURRENT_PAGE="queue"; tui_draw_queue; continue ;;
+                        "S") CPLAY_CURRENT_PAGE="info"; tui_draw_info; continue ;;
+                    esac
+                elif [[ "$next1" == "[" ]]; then
+                    if [[ "$next2" == "A" ]]; then # Up Arrow
+                        cplay_volume "5"
+                    elif [[ "$next2" == "B" ]]; then # Down Arrow
+                        cplay_volume "-5"
+                    elif [[ "$next2" == "C" ]]; then # Right Arrow
+                        cplay_seek "10"
+                    elif [[ "$next2" == "D" ]]; then # Left Arrow
+                        cplay_seek "-10"
+                    elif [[ "$next2" == "1" ]]; then
+                        local next3=""
+                        local next4=""
+                        read -rn1 -t 0.05 next3
+                        read -rn1 -t 0.05 next4
+                        if [[ "$next3" == "5" && "$next4" == "~" ]]; then
+                            CPLAY_CURRENT_PAGE="help"
+                            tui_draw_help
+                            continue
+                        elif [[ "$next3" == ";" ]]; then
+                            local next5=""
+                            local next6=""
+                            read -rn1 -t 0.05 next5
+                            read -rn1 -t 0.05 next6
+                            if [[ "$next5" == "5" ]]; then
+                                if [[ "$next6" == "C" ]]; then
+                                    cplay_next
+                                    tui_draw_header
+                                elif [[ "$next6" == "D" ]]; then
+                                    cplay_prev
+                                    tui_draw_header
+                                fi
+                            fi
+                        fi
+                    fi
+                fi
+                ;;
+        esac
+    done
+    stty "$CPLAY_OLD_STTY"
+    tput cnorm
+    clear
+    exit 0
+}
+
+# --- Main Entry: src/main.sh ---
+main(){
+	init "$@"
+	if [[ "$CPLAY_TUI_MODE" == "true" ]]; then
+		run_tui
+	else
+		run_menu
+	fi
+}
+main "$@"

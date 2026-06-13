@@ -13,9 +13,10 @@ tui_draw_header() {
     echo -e "  [${c}Space${r}] Play/Pause  |  [${c}Arrows${r}] Volume & Seek  "
     echo -e "  [${c}n${r} / ${c}Ctrl+Right${r}] Next  |  [${c}b${r} / ${c}Ctrl+Left${r}] Prev "
     echo -e "  [${c}i${r}] Diagnostics Info   |  [${c}q${r}] View Playlist    "
+    echo -e "  [${c}l${r}] View Source Stats  |  [${c}F5${r}] Track Metadata   "
     echo -e "  [${c}1${r}] Add & Play Track   |  [${c}2${r}] Add Music Source "
-    echo -e "  [${c}l${r}] View Source Stats  |  [${c}Ctrl + Shift + C${r}] Exit"
     echo -e "${y}=================================================${r}"
+    echo -e "  Press [${c}Ctrl+Shift+C${r}] anywhere to completely exit."
 }
 
 tui_draw_info() {
@@ -232,4 +233,41 @@ tui_draw_queue() {
     buf+="${y}============================${r}\e[K\n"
     buf+="  Item $(( CPLAY_QUEUE_SELECT_IDX + 1 )) of $num_items\e[K\n"
     printf "%b" "$buf"
+}
+
+tui_clear_metadata_art() {
+    if [[ "$CPLAY_KITTY_SUPPORT" == "true" ]]; then
+        kitty +kitten icat --clear
+    fi
+}
+
+tui_draw_metadata() {
+    clear
+    local y="${BL_YELLOW}"
+    local g="${BL_GREEN}"
+    local c="${BL_SKY_BLUE}"
+    local r="${BL_RESET}"
+
+    echo -e "${y}=== Track Metadata Details (F5) ===${r}"
+    echo -e "  Title      : ${g}${CPLAY_META[title]}${r}"
+    echo -e "  Artist     : ${c}${CPLAY_META[artist]}${r}"
+    echo -e "  Album      : ${c}${CPLAY_META[album]}${r}"
+    echo -e "  Genre      : ${c}${CPLAY_META[genre]}${r}"
+    echo -e "  Year/Date  : ${c}${CPLAY_META[date]}${r}"
+    echo -e "  Duration   : ${c}${CPLAY_META[duration]}${r}"
+    echo -e "  File Path  : ${c}${CPLAY_META[filepath]}${r}"
+    echo -e "  Kitty API  : ${c}${CPLAY_KITTY_SUPPORT}${r}"
+    echo -e "${y}=====================================${r}"
+    echo -e "  Press Esc or Ctrl+C to return to main menu..."
+
+    if [[ "$CPLAY_KITTY_SUPPORT" == "true" ]]; then
+        if [[ -n "$CPLAY_META_ART" && -f "$CPLAY_META_ART" ]]; then
+            # 30 cols × 15 rows, placed at col 2, row 12 (below the text block)
+            kitty +kitten icat --transfer-mode=file --place 30x15@2x12 "$CPLAY_META_ART"
+        else
+            echo -e "  ${y}[ No Cover Art Found ]${r}"
+        fi
+    else
+        echo -e "  \e[90m[ Kitty API Not Active ]\e[0m"
+    fi
 }

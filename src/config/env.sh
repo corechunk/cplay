@@ -21,3 +21,15 @@ declare -g RAW_PLAYER_PID=""
 declare -g CAVA_STATUS="inactive"
 declare -g CAVA_PID=""
 declare -g CPLAY_MUTE_STATE="false"
+
+# Metadata & Art State
+declare -g -A CPLAY_META=()
+declare -g CPLAY_META_ART=""
+declare -g CPLAY_META_DIR="${TMP}/metas"
+
+# Kitty support detection
+if [[ "$TERM" == *kitty* || -n "$KITTY_WINDOW_ID" ]]; then
+    declare -g CPLAY_KITTY_SUPPORT="true"
+else
+    declare -g CPLAY_KITTY_SUPPORT="false"
+fi

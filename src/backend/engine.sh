@@ -22,6 +22,7 @@ cplay_play() {
     else
         driver_raw_play "$1"
     fi
+    cplay_meta_load "$1"
 }
 
 cplay_pause() {

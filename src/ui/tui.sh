@@ -105,6 +105,7 @@ run_tui() {
                 if [[ -n "$dir_path" ]]; then
                     if [[ -d "$dir_path" ]]; then
                         CPLAY_SOURCES["$dir_path"]="active"
+                        CPLAY_STATS_DIRTY="true"
                         echo "  [Success] Added source folder: $dir_path"
                     else
                         echo "  [Error] Path is not a valid directory: $dir_path"
@@ -144,6 +145,7 @@ run_tui() {
                     local meta="${CPLAY_STATS_META["$target_path"]}"
                     IFS='|' read -r indent type name parent <<< "$meta"
                     tui_toggle_queue "$target_path" "$type"
+                    CPLAY_STATS_DIRTY="true"
                     tui_show_source_stats
                     continue
                 elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
@@ -163,6 +165,7 @@ run_tui() {
                     else
                         CPLAY_STATS_SORT_DIR="asc"
                     fi
+                    CPLAY_STATS_DIRTY="true"
                     tui_show_source_stats
                     continue
                 fi
@@ -293,6 +296,7 @@ run_tui() {
                             IFS='|' read -r indent type name parent <<< "$meta"
                             if [[ "$type" == "directory" ]]; then
                                 CPLAY_STATS_EXPANDED["$target_path"]="true"
+                                CPLAY_STATS_DIRTY="true"
                             fi
                             tui_show_source_stats
                         fi
@@ -304,6 +308,7 @@ run_tui() {
                             IFS='|' read -r indent type name parent <<< "$meta"
                             if [[ "$type" == "directory" ]]; then
                                 CPLAY_STATS_EXPANDED["$target_path"]="false"
+                                CPLAY_STATS_DIRTY="true"
                             fi
                             tui_show_source_stats
                         fi

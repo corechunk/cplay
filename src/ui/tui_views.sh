@@ -139,7 +139,7 @@ tui_show_source_stats() {
         fi
 
         local q_status
-        q_status=$(tui_get_queue_status "$path" "$type")
+        tui_get_queue_status "$path" "$type" q_status
 
         local q_colored=""
         case "$q_status" in

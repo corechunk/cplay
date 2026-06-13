@@ -492,6 +492,7 @@ declare -g -A CPLAY_STATS_EXPANDED=()
 declare -g CPLAY_STATS_SORT_DIR="asc"
 declare -g -i CPLAY_STATS_SELECT_IDX=0
 declare -g -i CPLAY_STATS_SCROLL_OFFSET=0
+declare -g CPLAY_STATS_DIRTY="true"
 declare -g -i CPLAY_QUEUE_SELECT_IDX=0
 declare -g -i CPLAY_QUEUE_SCROLL_OFFSET=0
 tui_scan_recursive() {
@@ -512,6 +513,8 @@ tui_scan_recursive() {
     done
 }
 tui_collect_items() {
+    [[ "$CPLAY_STATS_DIRTY" == "true" ]] || return
+    CPLAY_STATS_DIRTY="false"
     CPLAY_STATS_ITEMS=()
     local -a roots=()
     for root in "${!CPLAY_SOURCES[@]}"; do
@@ -525,7 +528,7 @@ tui_collect_items() {
         IFS=$'\n' roots=($(sort -r <<<"${roots[*]}")); unset IFS
     fi
     for root in "${roots[@]}"; do
-        CPLAY_STATS_META["$root"]="0|directory|$(basename "$root")|"
+        CPLAY_STATS_META["$root"]="0|directory|${root##*/}|"
         CPLAY_STATS_ITEMS+=("$root")
         if [[ "${CPLAY_STATS_EXPANDED["$root"]}" == "true" ]]; then
             tui_collect_subdir_items "$root" 1
@@ -535,24 +538,15 @@ tui_collect_items() {
 tui_collect_subdir_items() {
     local parent="$1"
     local -i indent=$2
-    local -a contents=()
     for item in "$parent"/*; do
         [[ -e "$item" ]] || continue
-        contents+=("$item")
-    done
-    if [[ "$CPLAY_STATS_SORT_DIR" == "asc" ]]; then
-        IFS=$'\n' contents=($(sort <<<"${contents[*]}")); unset IFS
-    elif [[ "$CPLAY_STATS_SORT_DIR" == "desc" ]]; then
-        IFS=$'\n' contents=($(sort -r <<<"${contents[*]}")); unset IFS
-    fi
-    for item in "${contents[@]}"; do
         local type="unknown"
         if [[ -d "$item" ]]; then
             type="directory"
         elif [[ -f "$item" ]]; then
             type="file"
         fi
-        CPLAY_STATS_META["$item"]="$indent|$type|$(basename "$item")|$parent"
+        CPLAY_STATS_META["$item"]="$indent|$type|${item##*/}|$parent"
         CPLAY_STATS_ITEMS+=("$item")
         if [[ "$type" == "directory" && "${CPLAY_STATS_EXPANDED["$item"]}" == "true" ]]; then
             tui_collect_subdir_items "$item" $((indent + 1))
@@ -562,49 +556,49 @@ tui_collect_subdir_items() {
 tui_get_queue_status() {
     local path="$1"
     local type="$2"
+    local -n _qs_result="$3"
     if [[ "$type" == "file" ]]; then
         for item in "${CPLAY_QUEUE[@]}"; do
             if [[ "$item" == "$path" ]]; then
-                echo "(*)"
+                _qs_result="(*)"
                 return
             fi
         done
-        echo "( )"
+        _qs_result="( )"
         return
     fi
     local -a files=()
-    tui_gather_files() {
+    _tui_gather_files_into() {
         local dir="$1"
         for item in "$dir"/*; do
             [[ -e "$item" ]] || continue
             if [[ -f "$item" ]]; then
                 files+=("$item")
             elif [[ -d "$item" ]]; then
-                tui_gather_files "$item"
+                _tui_gather_files_into "$item"
             fi
         done
     }
-    tui_gather_files "$path"
+    _tui_gather_files_into "$path"
     local total=${#files[@]}
     if (( total == 0 )); then
-        echo "( )"
+        _qs_result="( )"
         return
     fi
+    local -A _queue_set=()
+    for item in "${CPLAY_QUEUE[@]}"; do
+        _queue_set["$item"]=1
+    done
     local matched=0
     for f in "${files[@]}"; do
-        for item in "${CPLAY_QUEUE[@]}"; do
-            if [[ "$item" == "$f" ]]; then
-                ((matched++))
-                break
-            fi
-        done
+        [[ -v _queue_set["$f"] ]] && (( matched++ ))
     done
     if (( matched == 0 )); then
-        echo "( )"
+        _qs_result="( )"
     elif (( matched == total )); then
-        echo "(*)"
+        _qs_result="(*)"
     else
-        echo "(-)"
+        _qs_result="(-)"
     fi
 }
 tui_toggle_queue() {
@@ -775,6 +769,7 @@ run_tui() {
                 if [[ -n "$dir_path" ]]; then
                     if [[ -d "$dir_path" ]]; then
                         CPLAY_SOURCES["$dir_path"]="active"
+                        CPLAY_STATS_DIRTY="true"
                         echo "  [Success] Added source folder: $dir_path"
                     else
                         echo "  [Error] Path is not a valid directory: $dir_path"
@@ -813,6 +808,7 @@ run_tui() {
                     local meta="${CPLAY_STATS_META["$target_path"]}"
                     IFS='|' read -r indent type name parent <<< "$meta"
                     tui_toggle_queue "$target_path" "$type"
+                    CPLAY_STATS_DIRTY="true"
                     tui_show_source_stats
                     continue
                 elif [[ "$CPLAY_CURRENT_PAGE" == "queue" ]]; then
@@ -831,6 +827,7 @@ run_tui() {
                     else
                         CPLAY_STATS_SORT_DIR="asc"
                     fi
+                    CPLAY_STATS_DIRTY="true"
                     tui_show_source_stats
                     continue
                 fi
@@ -951,6 +948,7 @@ run_tui() {
                             IFS='|' read -r indent type name parent <<< "$meta"
                             if [[ "$type" == "directory" ]]; then
                                 CPLAY_STATS_EXPANDED["$target_path"]="true"
+                                CPLAY_STATS_DIRTY="true"
                             fi
                             tui_show_source_stats
                         fi
@@ -962,6 +960,7 @@ run_tui() {
                             IFS='|' read -r indent type name parent <<< "$meta"
                             if [[ "$type" == "directory" ]]; then
                                 CPLAY_STATS_EXPANDED["$target_path"]="false"
+                                CPLAY_STATS_DIRTY="true"
                             fi
                             tui_show_source_stats
                         fi
@@ -1166,7 +1165,7 @@ tui_show_source_stats() {
             type_str="${c}[FILE]${r} "
         fi
         local q_status
-        q_status=$(tui_get_queue_status "$path" "$type")
+        tui_get_queue_status "$path" "$type" q_status
         local q_colored=""
         case "$q_status" in
             "(*)") q_colored="${g}(*)${r}" ;;

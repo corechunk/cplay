@@ -110,8 +110,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/corechunk/cplay/main/cplay) 
 | `Space` | Play / Pause |
 | `↑ / ↓` | Volume Up / Down |
 | `← / →` | Seek -10s / +10s |
-| `1` | Add a track by filepath or URL |
-| `2` | Add a music source directory |
+| `1` | Add a track by filepath or URL (link not implemented yet) |
+| `2` | Add a music source directory (playlist link not implemented yet) |
 | `i` | Diagnostics page (same as F4) |
 | `q` | Queue page (same as F3) |
 | `l` | Source browser (same as F2) |

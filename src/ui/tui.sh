@@ -3,6 +3,7 @@
 # --- cplay Interactive TUI Player ---
 
 run_tui() {
+    CPLAY_SESSION_ACTIVE="true"
     engine_init
 
     local launch_dir="$HOME/Music"

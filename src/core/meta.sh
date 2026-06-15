@@ -2,6 +2,15 @@
 
 # --- Track Metadata & Cover Art Loader ---
 
+check_kitty_support() {
+    # Dynamically verify Kitty graphics protocol support
+    if command -v kitty >/dev/null 2>&1 && kitty +kitten query >/dev/null 2>&1; then
+        CPLAY_KITTY_SUPPORT="true"
+    else
+        CPLAY_KITTY_SUPPORT="false"
+    fi
+}
+
 cplay_format_duration() {
     local seconds="${1%.*}"
     if [[ -z "$seconds" || ! "$seconds" =~ ^[0-9]+$ ]]; then

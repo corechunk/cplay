@@ -1,12 +1,36 @@
 #!/usr/bin/env bash
+# deploy.sh - Version injection and compilation
 
-source <(curl -fsSL https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/import.sh)
-bl_import -v --strict dev/compile.sh
+(
+    # Use BASH_SOURCE[0] to reliably find this script's directory
+    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+    cd "$SCRIPT_DIR/.."
 
-bl_compile --dir src --out-name cplay -v -s all -r --out-dir . --main src/main.sh \
-	--strict --lib-curl start \
-	"https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/import.sh" \
-	"https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/colors.sh" \
-	"https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/ui/progress_bars.sh" \
-	"https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/async/pid.sh" \
-	"https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/io/pipes.sh" stop
+    # 1. Version Injection
+    if [ ! -f ".version" ]; then
+        echo "Error: .version file not found."
+        exit 1
+    fi
+    VERSION=$(cat .version)
+
+    echo "Injecting version $VERSION into src/config/env.sh..."
+    
+    # If the line exists, replace it in place. If it doesn't, insert it at line 2.
+    if grep -q "declare -g VERSION=" src/config/env.sh; then
+        sed -i "s/^declare -g VERSION=.*/declare -g VERSION=\"$VERSION\"/" src/config/env.sh
+    else
+        sed -i "2i declare -g VERSION=\"$VERSION\"" src/config/env.sh
+    fi
+
+    # 2. Compilation
+    source <(curl -fsSL https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/import.sh)
+    bl_import -v --strict dev/compile.sh
+
+    bl_compile --dir src --out-name cplay -v -s all -r --out-dir . --main src/main.sh \
+        --strict --lib-curl start \
+        "https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/import.sh" \
+        "https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/colors.sh" \
+        "https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/ui/progress_bars.sh" \
+        "https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/async/pid.sh" \
+        "https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/io/pipes.sh" stop
+)

@@ -51,32 +51,63 @@
 
 ## 🚀 Usage
 
-### ⚡ Run Instantly — No Installation Needed
+### ⚡ Run Instantly (No Installation)
 
-cplay is a single compiled script. You can run it directly from the internet:
+cplay is a single compiled script. You can test it directly from the web without touching your system:
 
 ```bash
-# Launch TUI mode straight from the web
-bash <(curl -fsSL https://raw.githubusercontent.com/corechunk/cplay/main/cplay) -t
+# Launch default TUI mode straight from the web
+bash <(curl -fsSL https://raw.githubusercontent.com/corechunk/cplay/main/cplay)
 
-# Launch TUI with a specific folder using mpv engine
-bash <(curl -fsSL https://raw.githubusercontent.com/corechunk/cplay/main/cplay) -t -m mpv -f ~/Music
+# Launch with a specific folder using mpv engine
+bash <(curl -fsSL https://raw.githubusercontent.com/corechunk/cplay/main/cplay) -m mpv -f ~/Music
 ```
 
 > [!TIP]
 > No cloning, no compiling. Just pipe and play. Optional tools like `ffmpeg` and `kitty` unlock cover art — but the player works without them too.
 
-### 🎛️ Flags
+### 📦 Installation (Recommended)
 
-| Flag | Alias | Description |
-| :--- | :--- | :--- |
-| `--tui` | `-t` | Launch in interactive TUI mode |
-| `--folder DIR` | `-f DIR` | Open TUI with a specific music folder |
-| `--mode mpv` | `-m mpv` | Use mpv as the playback engine |
-| `--mode raw` | `-m raw` | Use the raw bash engine (default) |
-| `--verbose` | `-v` | Enable verbose/diagnostic output |
-| `--check-imports` | `-c` | Run import diagnostics and exit |
-| `--help` | `-h` | Show help message |
+Install cplay to your system with our professional POSIX-compliant installer. It handles dependency checks, path conflicts, and official identity verification.
+
+**Modern Method (Safest - Recommended for Interactivity)**
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/corechunk/cplay/main/installer.sh)
+```
+
+**Classic Method (Most Portable)**
+```bash
+curl -fsSL https://raw.githubusercontent.com/corechunk/cplay/main/installer.sh | sh
+```
+
+> [!NOTE]
+> The installer automatically detects if it is running from a local clone or via a remote download. If auto-detection fails, you can force the method using the `--local` or `--remote` flags:
+> 
+> ```bash
+> # Force remote download mode
+> curl -fsSL https://raw.githubusercontent.com/corechunk/cplay/main/installer.sh | sh -s -- --remote
+> 
+> # Force local installation mode
+> ./installer.sh --local
+> ```
+
+### 🛠️ Manual Compilation & Installation
+
+If you prefer to build from source or hack on the code:
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/corechunk/cplay.git
+cd cplay
+
+# 2. Compile into a single binary (Requires curl for bash-lib via internet)
+# Optional - cplay is pre-compiled in the repo root
+./scripts/deploy
+
+# 3. Run the installer locally
+./installer.sh
+```
+
 
 ---
 
@@ -143,6 +174,50 @@ bash <(curl -fsSL https://raw.githubusercontent.com/corechunk/cplay/main/cplay) 
 
 ---
 
+## 📋 Summary Reference
+
+### 🛠️ Dependencies
+
+| Category | Tool | Description | Min Version | Required? |
+| :--- | :--- | :--- | :---: | :---: |
+| **Required** | `bash` | Core shell runtime | 4.0 | Yes |
+| **Required** | `ffmpeg` | Decodes audio for raw engine | 0.5 | Yes |
+| **Required** | `ffprobe` | Extracts track metadata | 0.5 | Yes |
+| **Required** | `pipewire` | Audio output via `pw-cat` | - | Yes* |
+| **Required** | `pulseaudio` | Audio output via `pacat` | - | Yes* |
+| **Optional** | `mpv` | Alternative playback engine | 0.17.0 | Optional |
+| **Optional** | `kitty` | Terminal graphics support | 0.10.0 | Optional |
+| **Optional** | `imagemagick`| Required for Kitty's `icat` | - | Optional |
+| **Optional** | `curl` | Asset fetching & updates | 7.80.0 | Optional |
+
+*\* Either **PipeWire** or **PulseAudio** is required for the default raw engine.*
+
+### 🎛️ Flags
+
+| Flag | Alias | Description |
+| :--- | :--- | :--- |
+| `--tui` | `-t` | Launch in interactive TUI mode (**Default**) |
+| `--menu` | | Launch in classic interactive menu mode |
+| `--cli` | | Launch in non-interactive CLI mode (WIP) |
+| `--folder DIR` | `-f DIR` | Open cplay with a specific music folder |
+| `--mode mpv` | `-m mpv` | Use mpv as the playback engine |
+| `--mode raw` | `-m raw` | Use the raw bash engine |
+| `--identity` | | Show official application identity |
+| `--provider` | | Show developer provider information |
+| `--check-imports` | `-c` | Run diagnostics check and exit |
+| `--version` | | Show version information |
+| `--verbose` | `-v` | Enable verbose output |
+| `--help` | `-h` | Show this help message |
+
+### ⚙️ Installer Flags (`installer.sh`)
+
+| Flag | Description |
+| :--- | :--- |
+| `--local` | Force local installation mode |
+| `--remote` | Force remote download installation mode |
+
+---
+
 ## 📂 Project Structure
 
 ```
@@ -174,28 +249,6 @@ cplay/
         ├── tui_browser.sh      # File tree browser state & logic
         └── tui_views.sh        # All page render functions
 ```
-
----
-
-## 📦 Local Installation & Compilation
-
-If you want to hack on cplay or build the binary yourself:
-
-```bash
-git clone https://github.com/corechunk/cplay.git
-cd cplay
-./scripts/deploy   # compiles src/ into ./cplay
-```
-
-### Optional Dependencies
-
-| Tool | Purpose | Required? |
-| :--- | :--- | :---: |
-| `mpv` | High-quality playback engine | Optional |
-| `ffmpeg` | Cover art extraction | Optional |
-| `ffprobe` | Track metadata reading | Optional |
-| `kitty` | Cover art display in terminal | Optional |
-| `aplay` / `paplay` | Raw engine audio output | Recommended |
 
 ---
 

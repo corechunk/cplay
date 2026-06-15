@@ -14,6 +14,12 @@ init(){
 }
 
 deinit(){
+	# Quiet exit for diagnostic flags if no session was active
+	if [[ "$CPLAY_SESSION_ACTIVE" == "false" ]]; then
+		rm -rf "$TMP"
+		exit 0
+	fi
+
 	# Restore original terminal settings immediately before cleaning up
 	if [[ -n "$CPLAY_OLD_STTY" ]]; then
 		stty "$CPLAY_OLD_STTY" 2>/dev/null

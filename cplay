@@ -1319,14 +1319,16 @@ cplay_mute() {
 }
 
 # --- Included: src/config/env.sh ---
+declare -g VERSION="1.0.0.0"
 declare -g TMP="/tmp/corechunk/cplay"
 declare -g ACTIVE_ENGINE="raw"
 declare -g MPV_SOCKET="$TMP/cplay-mpv.sock"
 declare -g CPLAY_VERBOSE="false"
-declare -g CPLAY_TUI_MODE="false"
+declare -g CPLAY_MODE="tui"
 declare -g CPLAY_CURRENT_PAGE="main"
 declare -g CPLAY_OLD_STTY=""
 declare -g CPLAY_LAUNCH_FOLDER=""
+declare -g CPLAY_SESSION_ACTIVE="false"
 declare -g RAW_CURRENT_FILE=""
 declare -g -i RAW_CURRENT_OFFSET=0
 declare -g RAW_PAUSE_STATE="false"
@@ -1358,8 +1360,37 @@ parse_flags() {
             --check-imports|-c)
                 bl_import -v --strict info/diagnostics.sh
                 bl_info_check
-				read
                 exit 0
+                ;;
+            --version)
+                if [[ "$CPLAY_VERBOSE" == "true" ]]; then
+                    echo "cplay version: $VERSION"
+                    echo "Build Date: $(date)"
+                    echo "Commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+                else
+                    echo "$VERSION"
+                fi
+                exit 0
+                ;;
+            --provider)
+                echo "github.com/corechunk"
+                exit 0
+                ;;
+            --identity)
+                echo "corechunk/cplay"
+                exit 0
+                ;;
+            --tui|-t)
+                CPLAY_MODE="tui"
+                shift
+                ;;
+            --menu)
+                CPLAY_MODE="menu"
+                shift
+                ;;
+            --cli)
+                CPLAY_MODE="cli"
+                shift
                 ;;
             --help|-h)
                 echo "cplay - Terminal Music Player"
@@ -1368,11 +1399,14 @@ parse_flags() {
                 echo "Options:"
                 echo "  -h, --help           Show this help message"
                 echo "  -c, --check-imports  Run diagnostics check"
+                echo "  --provider           Show developer provider information"
+                echo "  --identity           Show official application identity"
+                echo "  --menu               Launch in interactive menu mode"
+                echo "  --cli                Launch in non-interactive CLI mode"
                 echo "  -m, --mode [raw|mpv] Select playback engine (default: raw)"
                 echo "  -v, --verbose        Enable verbose output during diagnostics/cleanup"
                 echo "  -f, --folder DIR     Launch with specific music folder"
-                echo "  -t, --tui            Launch in interactive raw keyboard TUI mode"
-                read
+                echo "  -t, --tui            Launch in interactive TUI mode (default)"
                 exit 0
                 ;;
             --mode|-m)
@@ -1386,10 +1420,6 @@ parse_flags() {
                 ;;
             --verbose|-v)
                 CPLAY_VERBOSE="true"
-                shift
-                ;;
-            --tui|-t)
-                CPLAY_TUI_MODE="true"
                 shift
                 ;;
             --folder|-f)
@@ -1503,6 +1533,10 @@ init(){
 	echo init
 }
 deinit(){
+	if [[ "$CPLAY_SESSION_ACTIVE" == "false" ]]; then
+		rm -rf "$TMP"
+		exit 0
+	fi
 	if [[ -n "$CPLAY_OLD_STTY" ]]; then
 		stty "$CPLAY_OLD_STTY" 2>/dev/null
 	else
@@ -1551,6 +1585,7 @@ trap deinit EXIT INT TERM
 
 # --- Included: src/ui/menu.sh ---
 run_menu() {
+    CPLAY_SESSION_ACTIVE="true"
     engine_init
     while true; do
         clear
@@ -1839,6 +1874,7 @@ tui_toggle_queue() {
 
 # --- Included: src/ui/tui.sh ---
 run_tui() {
+    CPLAY_SESSION_ACTIVE="true"
     engine_init
     local launch_dir="$HOME/Music"
     if [[ -n "$CPLAY_LAUNCH_FOLDER" && -d "$CPLAY_LAUNCH_FOLDER" ]]; then
@@ -2416,12 +2452,18 @@ tui_draw_metadata() {
 }
 
 # --- Main Entry: src/main.sh ---
+run_cli() {
+    echo "cplay CLI mode: Non-interactive playback is not yet fully implemented."
+    echo "Arguments: $*"
+    exit 0
+}
 main(){
 	init "$@"
-	if [[ "$CPLAY_TUI_MODE" == "true" ]]; then
-		run_tui
-	else
-		run_menu
-	fi
+	case "$CPLAY_MODE" in
+		cli)  run_cli "$@" ;;
+		tui)  run_tui ;;
+		menu) run_menu ;;
+		*)    run_tui ;; # Default
+	esac
 }
 main "$@"

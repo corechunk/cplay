@@ -9,8 +9,37 @@ parse_flags() {
                 # Strict check imports and diagnostic test
                 bl_import -v --strict info/diagnostics.sh
                 bl_info_check
-				read
                 exit 0
+                ;;
+            --version)
+                if [[ "$CPLAY_VERBOSE" == "true" ]]; then
+                    echo "cplay version: $VERSION"
+                    echo "Build Date: $(date)"
+                    echo "Commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+                else
+                    echo "$VERSION"
+                fi
+                exit 0
+                ;;
+            --provider)
+                echo "github.com/corechunk"
+                exit 0
+                ;;
+            --identity)
+                echo "corechunk/cplay"
+                exit 0
+                ;;
+            --tui|-t)
+                CPLAY_MODE="tui"
+                shift
+                ;;
+            --menu)
+                CPLAY_MODE="menu"
+                shift
+                ;;
+            --cli)
+                CPLAY_MODE="cli"
+                shift
                 ;;
             --help|-h)
                 echo "cplay - Terminal Music Player"
@@ -19,11 +48,14 @@ parse_flags() {
                 echo "Options:"
                 echo "  -h, --help           Show this help message"
                 echo "  -c, --check-imports  Run diagnostics check"
+                echo "  --provider           Show developer provider information"
+                echo "  --identity           Show official application identity"
+                echo "  --menu               Launch in interactive menu mode"
+                echo "  --cli                Launch in non-interactive CLI mode"
                 echo "  -m, --mode [raw|mpv] Select playback engine (default: raw)"
                 echo "  -v, --verbose        Enable verbose output during diagnostics/cleanup"
                 echo "  -f, --folder DIR     Launch with specific music folder"
-                echo "  -t, --tui            Launch in interactive raw keyboard TUI mode"
-                read
+                echo "  -t, --tui            Launch in interactive TUI mode (default)"
                 exit 0
                 ;;
             --mode|-m)
@@ -37,10 +69,6 @@ parse_flags() {
                 ;;
             --verbose|-v)
                 CPLAY_VERBOSE="true"
-                shift
-                ;;
-            --tui|-t)
-                CPLAY_TUI_MODE="true"
                 shift
                 ;;
             --folder|-f)

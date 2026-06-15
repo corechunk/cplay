@@ -1,13 +1,19 @@
-# flag parsing here
-# def no flag to menu exec ....
+# --- cplay Entry Point ---
+
+run_cli() {
+    echo "cplay CLI mode: Non-interactive playback is not yet fully implemented."
+    echo "Arguments: $*"
+    exit 0
+}
 
 main(){
 	init "$@"
-	if [[ "$CPLAY_TUI_MODE" == "true" ]]; then
-		run_tui
-	else
-		run_menu
-	fi
+	case "$CPLAY_MODE" in
+		cli)  run_cli "$@" ;;
+		tui)  run_tui ;;
+		menu) run_menu ;;
+		*)    run_tui ;; # Default
+	esac
 }
 main "$@"
 

@@ -3,6 +3,7 @@
 # --- cplay Interactive Menu UI ---
 
 run_menu() {
+    CPLAY_SESSION_ACTIVE="true"
     # Initialize the playback engine
     engine_init
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+declare -g VERSION="1.0.0.0"
+
 
 # --- Environment & Engine Globals ---
 
@@ -6,10 +8,11 @@ declare -g TMP="/tmp/corechunk/cplay"
 declare -g ACTIVE_ENGINE="raw"
 declare -g MPV_SOCKET="$TMP/cplay-mpv.sock"
 declare -g CPLAY_VERBOSE="false"
-declare -g CPLAY_TUI_MODE="false"
+declare -g CPLAY_MODE="tui"
 declare -g CPLAY_CURRENT_PAGE="main"
 declare -g CPLAY_OLD_STTY=""
 declare -g CPLAY_LAUNCH_FOLDER=""
+declare -g CPLAY_SESSION_ACTIVE="false"
 
 # Raw driver state variables
 declare -g RAW_CURRENT_FILE=""

@@ -1,5 +1,1094 @@
 #!/usr/bin/env bash
 
+# --- Inlined Remote: https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/import.sh ---
+bl_check_deps() {
+    local caller="$1"
+    shift
+    local missing=0
+    for dep in "$@"; do
+        if ! declare -f "$dep" >/dev/null 2>&1 && ! command -v "$dep" >/dev/null 2>&1; then
+            echo -e "\033[1;31m[ERROR]\033[0m $caller: Missing dependency '\033[1;33m$dep\033[0m'" >&2
+            missing=1
+        fi
+    done
+    return $missing
+}
+declare -g -A BL_REGISTRY=(
+    ["core|bl_check_deps"]=""
+    ["core|bl_hex_to_rgb"]=""
+    ["core|bl_version_compare"]=""
+    ["string|bl_parse_selection"]=""
+    ["string|bl_expand_selection"]=""
+    ["string|bl_validate_selection"]=""
+    ["ui|bl_progress_bar"]="bl_hex_to_rgb|bl_check_deps"
+    ["ui|bl_square_progress"]="bl_hex_to_rgb|bl_check_deps"
+    ["ui|bl_spiral_progress"]="bl_hex_to_rgb|bl_check_deps"
+    ["ui|bl_terrain_loader"]="bl_hex_to_rgb|bl_check_deps"
+    ["ui|bl_pie"]="bl_check_deps"
+    ["ui|bl_matrix_filler"]="tput"
+    ["ui|bl_load_ghost"]=""
+    ["ui|bl_load_bounce"]=""
+    ["ui|bl_load_marquee"]=""
+    ["ui|bl_load_wave"]=""
+    ["ui|bl_menu"]=""
+    ["ui|bl_toast"]=""
+    ["ui|bl_input_secure"]=""
+    ["ui|bl_chart_spark"]=""
+    ["io|bl_file_count_feeder_"]=""
+    ["io|_bl_count_percent_emitter_"]=""
+    ["io|bl_file_log_feeder_"]=""
+    ["info|bl_info_check"]="bl_registry_get_types|bl_registry_get_funcs|bl_registry_get_deps"
+    ["info|bl_info_menu"]="bl_registry_get_types|bl_registry_get_funcs|bl_registry_get_deps"
+    ["info|bl_bash_tutor"]=""
+    ["async|bl_pid_store"]=""
+    ["async|bl_pid_wait"]=""
+    ["async|bl_pid_status"]=""
+    ["async|bl_pid_reap"]=""
+    ["dev|bl_compile"]=""
+    ["core|bl_import"]="curl"
+    ["core|bl_import_local"]=""
+    ["core|import"]="bl_import_local"
+    ["core|bl_update_registry"]="curl|jq"
+)
+declare -g -A BL_FILE_REGISTRY=(
+    ["async|pid.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/async/pid.sh"
+    ["core|colors.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/colors.sh"
+    ["core|import.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/import.sh"
+    ["core|versions.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/versions.sh"
+    ["dev|compile.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/dev/compile.sh"
+    ["info|diagnostics.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/info/diagnostics.sh"
+    ["info|tutor.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/info/tutor.sh"
+    ["io|pipes.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/io/pipes.sh"
+    ["string|selection.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/string/selection.sh"
+    ["ui|matrix_filler.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/ui/matrix_filler.sh"
+    ["ui|progress_bars.sh"]="https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/ui/progress_bars.sh"
+)
+bl_registry_get_types() {
+    local -A types_seen
+    for key in "${!BL_REGISTRY[@]}"; do
+        local type="${key%%|*}"
+        types_seen["$type"]=1
+    done
+    echo "${!types_seen[@]}"
+}
+bl_registry_get_funcs() {
+    local target_type="$1"
+    local funcs=()
+    for key in "${!BL_REGISTRY[@]}"; do
+        local type="${key%%|*}"
+        local func="${key#*|}"
+        if [[ "$type" == "$target_type" ]]; then
+            funcs+=("$func")
+        fi
+    done
+    echo "${funcs[@]}"
+}
+bl_registry_get_deps() {
+    local target_func="$1"
+    for key in "${!BL_REGISTRY[@]}"; do
+        local func="${key#*|}"
+        if [[ "$func" == "$target_func" ]]; then
+            echo "${BL_REGISTRY[$key]}"
+            return 0
+        fi
+    done
+    return 1
+}
+bl_update_registry() {
+    bl_check_deps "bl_update_registry" "curl" "jq" || return 1
+    local repo="${1:-bash-lib}"
+    local org="${2:-corechunk}"
+    local branch="${3:-main}"
+    local base_dir
+    base_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+    local output_file="$base_dir/lib/core/import.sh"
+    echo -e "\033[1;34m[INFO]\033[0m Fetching file tree for ${org}/${repo} (${branch}) from GitHub API..."
+    local tree_json
+    tree_json=$(curl -s "https://api.github.com/repos/${org}/${repo}/git/trees/${branch}?recursive=1")
+    if [[ $? -ne 0 || -z "$tree_json" || $(echo "$tree_json" | jq -r '.message // empty') == "Not Found" ]]; then
+        echo -e "\033[1;31m[ERROR]\033[0m Failed to fetch repository tree. Check repo name and connection." >&2
+        return 1
+    fi
+    local temp_file
+    temp_file=$(mktemp)
+    local new_registry
+    new_registry=$(echo "$tree_json" | jq -r --arg org "$org" --arg repo "$repo" --arg branch "$branch" '
+        .tree[]
+        | select(.type == "blob" and (.path | endswith(".sh")))
+        | .path as $p
+        | ($p | split("/")) as $parts
+        | (if ($p | startswith("lib/")) then $parts[1] elif ($parts | length) > 1 then $parts[0] else "main" end) as $cat
+        | $parts[-1] as $file
+        | "    [\"\($cat)|\($file)\"]=\"https://raw.githubusercontent.com/\($org)/\($repo)/\($branch)/\($p)\""
+    ' | sort)
+    awk -v reg="$new_registry" '
+        /# === BL_FILE_REGISTRY_START ===/ {
+            print "# === BL_FILE_REGISTRY_START ==="
+            print "declare -g -A BL_FILE_REGISTRY=("
+            print reg
+            print ")"
+            skip = 1
+            next
+        }
+        /# === BL_FILE_REGISTRY_END ===/ {
+            print "# === BL_FILE_REGISTRY_END ==="
+            skip = 0
+            next
+        }
+        !skip { print }
+    ' "$output_file" > "$temp_file"
+    mv "$temp_file" "$output_file"
+    echo -e "\033[1;32m[SUCCESS]\033[0m File registry updated successfully inside: $output_file"
+    source "$output_file"
+}
+_bl_curl_source() {
+    local key="$1"
+    local url="$2"
+    local verbose="$3"
+    local is_optional="${4:-0}"
+    if [[ "$verbose" -eq 1 ]]; then
+        local tag="[Sourcing Remote]"
+        local cat="${key%%|*}"
+        local file="${key#*|}"
+        if [[ "$cat" == "$file" ]]; then
+            tag="[Sourcing Monolith]"
+        fi
+        echo -n -e "\033[1;34m$tag\033[0m $key -> $url"
+    fi
+    local temp_err
+    temp_err=$(mktemp)
+    local curl_out
+    curl_out=$(curl -fsSL "$url" 2>"$temp_err")
+    local ec=$?
+    local curl_err
+    curl_err=$(<"$temp_err")
+    rm -f "$temp_err"
+    if [[ $ec -eq 0 ]]; then
+        if [[ "$verbose" -eq 1 ]]; then
+            echo -e " \033[1;32m✅\033[0m"
+        fi
+        source /dev/stdin <<< "$curl_out"
+        return 0
+    else
+        local err_label="\033[1;31m❌ [Network Error]\033[0m"
+        if [[ $ec -eq 22 ]]; then
+            err_label="\033[1;31m❌ [File Not Found]\033[0m"
+        fi
+        if [[ "$verbose" -eq 1 ]]; then
+            echo ""
+        fi
+        if [[ "$is_optional" -eq 1 ]]; then
+            if [[ "$verbose" -eq 1 ]]; then
+                echo -e "  $err_label $curl_err" >&2
+            fi
+        else
+            echo -e "  $err_label $curl_err" >&2
+        fi
+        return 1
+    fi
+}
+bl_import() {
+    bl_check_deps "bl_import" "curl" || return 1
+    local verbose=0
+    local strict=0
+    local has_error=0
+    local pattern
+    local -a remote_urls=()
+    while [[ "$#" -gt 0 ]]; do
+        case "$1" in
+            -v|--verbose) verbose=1; shift ;;
+            --strict) strict=1; shift ;;
+            --lib-curl)
+                shift
+                if [[ "$1" == "start" ]]; then
+                    shift
+                    while [[ "$#" -gt 0 && "$1" != "stop" ]]; do
+                        remote_urls+=("$1")
+                        shift
+                    done
+                    [[ "$1" == "stop" ]] && shift
+                else
+                    remote_urls+=("$1")
+                    shift
+                fi
+                ;;
+            -*) echo -e "\033[1;31m[ERROR]\033[0m Unknown flag: $1" >&2; return 1 ;;
+            *) pattern="$1"; shift ;;
+        esac
+    done
+    if [[ ${#remote_urls[@]} -gt 0 ]]; then
+        for url in "${remote_urls[@]}"; do
+            if ! _bl_curl_source "remote|$url" "$url" "$verbose" 0; then
+                [[ "$strict" -eq 1 ]] && return 1
+            fi
+        done
+        return 0
+    fi
+    pattern="${pattern:-*}"
+    local search_cat=""
+    local search_file=""
+    local is_glob=0  # 1 = category-level glob, 0 = specific file request
+    if [[ "$pattern" == "*" ]]; then
+        search_cat="*"
+        search_file="*"
+        is_glob=1
+    elif [[ "$pattern" == */* ]]; then
+        search_cat="${pattern%%/*}"
+        search_file="${pattern#*/}"
+        [[ -z "$search_file" ]] && search_file="*"
+        [[ "$search_file" == "*" ]] && is_glob=1
+    else
+        search_cat="$pattern"
+        search_file="*"
+        is_glob=1
+    fi
+    if [[ "$is_glob" -eq 0 ]]; then
+        local key="$search_cat|$search_file"
+        local url="${BL_FILE_REGISTRY[$key]:-}"
+        if [[ -z "$url" ]]; then
+            echo -e "\033[1;31m[ERROR]\033[0m Registry entry not found: $key" >&2
+            return $strict
+        fi
+        if [[ "$search_file" != *.sh && "$search_file" != *.bash ]]; then
+            echo -e "\033[1;31m[ERROR]\033[0m '$search_file' is not a .sh or .bash file." >&2
+            return $strict
+        fi
+        if ! _bl_curl_source "$key" "$url" "$verbose" 0; then
+            echo -e "\033[1;31m[ERROR]\033[0m Failed to source remote library: $key ($url)" >&2
+            return $strict
+        fi
+        return 0
+    fi
+    local -A sourced_cats=()
+    for key in "${!BL_FILE_REGISTRY[@]}"; do
+        local cat="${key%%|*}"
+        local file="${key#*|}"
+        if [[ "$search_cat" != "*" && "$cat" != "$search_cat" ]]; then
+            continue
+        fi
+        if [[ "$file" != *.sh && "$file" != *.bash && "$file" != "$cat" ]]; then
+            continue
+        fi
+        sourced_cats["$cat"]=1
+    done
+    if [[ "${#sourced_cats[@]}" -eq 0 ]]; then
+        echo -e "\033[1;33m[bl_import]\033[0m No sourceable entries matched: $pattern" >&2
+        return $strict
+    fi
+    for cat in "${!sourced_cats[@]}"; do
+        local monolith_key="$cat|$cat"
+        local monolith_url="${BL_FILE_REGISTRY[$monolith_key]:-}"
+        local monolith_sourced=0
+        if [[ -n "$monolith_url" ]]; then
+            if _bl_curl_source "$monolith_key" "$monolith_url" "$verbose" 1; then
+                monolith_sourced=1
+            else
+                [[ "$verbose" -eq 1 ]] && echo -e "\033[1;33m[WARN]\033[0m Monolith failed for '$cat', falling back to individual files." >&2
+            fi
+        fi
+        if [[ "$monolith_sourced" -eq 0 ]]; then
+            local fallback_found=0
+            for key in "${!BL_FILE_REGISTRY[@]}"; do
+                local fcat="${key%%|*}"
+                local file="${key#*|}"
+                [[ "$fcat" != "$cat" ]] && continue
+                [[ "$file" != *.sh && "$file" != *.bash ]] && continue
+                local url="${BL_FILE_REGISTRY[$key]:-}"
+                [[ -z "$url" ]] && continue
+                if ! _bl_curl_source "$key" "$url" "$verbose" 0; then
+                    echo -e "\033[1;31m[ERROR]\033[0m Failed to source remote library: $key ($url)" >&2
+                    if [[ "$strict" -eq 1 ]]; then
+                        return 1
+                    fi
+                    has_error=1
+                fi
+                (( fallback_found++ ))
+            done
+            if [[ "$fallback_found" -eq 0 ]]; then
+                echo -e "\033[1;33m[bl_import]\033[0m No sourceable files matched for category: $cat" >&2
+                if [[ "$strict" -eq 1 ]]; then
+                    return 1
+                fi
+                has_error=1
+            fi
+        fi
+    done
+    if [[ "$strict" -eq 1 && "$has_error" -eq 1 ]]; then
+        return 1
+    fi
+    return 0
+}
+_bl_is_sourceable() {
+    local f="$1"
+    local base="${f##*/}"
+    if [[ "$f" == *.sh || "$f" == *.bash ]]; then
+        return 0
+    fi
+    if [[ "$base" != *.* ]]; then
+        local shebang
+        shebang=$(head -c 100 "$f" 2>/dev/null | head -1)
+        if [[ "$shebang" == *bash* && "$shebang" != *" sh"* && "$shebang" != */sh ]]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+bl_import_local() {
+    bl_check_deps "bl_import_local" || return 1
+    local verbose=0
+    local strict=0
+    local patterns=()
+    while [[ "$#" -gt 0 ]]; do
+        case "$1" in
+            -v|--verbose) verbose=1; shift ;;
+            --strict) strict=1; shift ;;
+            *) patterns+=("$1"); shift ;;
+        esac
+    done
+    if [[ "${#patterns[@]}" -eq 0 ]]; then
+        echo -e "\033[1;31m[import]\033[0m pattern required (e.g. \"lib/*\")" >&2
+        return 1
+    fi
+    shopt -s globstar nullglob
+    local found=0
+    local pattern target file
+    local -A _seen=()
+    for pattern in "${patterns[@]}"; do
+        [[ "$pattern" != /* ]] && pattern="${PWD}/${pattern}"
+        local -a targets=( $pattern )
+        for target in "${targets[@]}"; do
+            if [[ -d "$target" ]]; then
+                for file in "$target"/**/* "$target"/*; do
+                    [[ -f "$file" ]] || continue
+                    [[ -n "${_seen[$file]}" ]] && continue
+                    _bl_is_sourceable "$file" || continue
+                    _seen["$file"]=1
+                    [[ "$verbose" -eq 1 ]] && echo -e "\033[1;34m[import]\033[0m $file"
+                    source "$file"
+                    (( found++ ))
+                done
+            elif [[ -f "$target" ]]; then
+                [[ -n "${_seen[$target]}" ]] && continue
+                _bl_is_sourceable "$target" || continue
+                _seen["$target"]=1
+                [[ "$verbose" -eq 1 ]] && echo -e "\033[1;34m[import]\033[0m $target"
+                source "$target"
+                (( found++ ))
+            fi
+        done
+    done
+    shopt -u globstar nullglob
+    if (( found == 0 )); then
+        echo -e "\033[1;33m[import]\033[0m No sourceable files matched: ${patterns[*]}" >&2
+        return $strict
+    fi
+}
+import() {
+    bl_check_deps "import" "bl_import_local" || return 1
+    bl_import_local "$@"
+}
+
+# --- Inlined Remote: https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/colors.sh ---
+declare -g BL_RED=$'\e[31m'
+declare -g BL_GREEN=$'\e[32m'
+declare -g BL_YELLOW=$'\e[33m'
+declare -g BL_ORANGE=$'\e[38;5;166m'
+declare -g BL_SKY_BLUE=$'\e[36m'
+declare -g BL_MAGENTA=$'\e[35m'
+declare -g BL_WHITE=$'\e[37m'
+declare -g BL_RESET=$'\e[0m'
+declare -g BL_BLUE=$'\e[34m'
+declare -g BL_BLACK=$'\e[30m'
+declare -g BL_GRAY=$'\e[90m'
+declare -g BL_BRIGHT_RED=$'\e[91m'
+declare -g BL_BRIGHT_GREEN=$'\e[92m'
+declare -g BL_BRIGHT_YELLOW=$'\e[93m'
+declare -g BL_BRIGHT_BLUE=$'\e[94m'
+declare -g BL_BRIGHT_MAGENTA=$'\e[95m'
+declare -g BL_BRIGHT_CYAN=$'\e[96m'
+declare -g BL_BRIGHT_WHITE=$'\e[97m'
+bl_hex_to_rgb() {
+    local hex="${1#\#}"
+    local r g b
+    if [[ ${#hex} -eq 6 ]]; then
+        r=$((16#${hex:0:2}))
+        g=$((16#${hex:2:2}))
+        b=$((16#${hex:4:2}))
+    else
+        r=0; g=0; b=0
+    fi
+    echo "$r $g $b"
+}
+
+# --- Inlined Remote: https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/ui/progress_bars.sh ---
+bl_progress_bar() {
+    bl_check_deps "bl_progress_bar" "bl_hex_to_rgb" || return 1
+    local label="Progress"
+    local show_status=false
+    local show_log=false
+    local log_height=3
+    local color_mode="position"
+    local r1=0; local g1=0; local b1=255 # Default Start: Blue
+    local r2=0; local g2=255; local b2=0  # Default End: Green
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -l|--label) label="$2"; shift 2 ;;
+            --status) show_status=true; shift ;;
+            --log) show_log=true; shift ;;
+            --log-height) show_log=true; log_height="$2"; shift 2 ;;
+            -w|--width) user_width="$2"; shift 2 ;;
+            -fw|--full-width) full_width=true; shift ;;
+            -c|--color-mode) color_mode="$2"; shift 2 ;;
+            -h|--hex|--start)
+                local rgb_out
+                rgb_out=$(bl_hex_to_rgb "$2")
+                r1="${rgb_out%% *}"
+                local tmp="${rgb_out#* }"
+                g1="${tmp%% *}"
+                b1="${tmp#* }"
+                shift 2
+                ;;
+            --end)
+                local rgb_out
+                rgb_out=$(bl_hex_to_rgb "$2")
+                r2="${rgb_out%% *}"
+                local tmp="${rgb_out#* }"
+                g2="${tmp%% *}"
+                b2="${tmp#* }"
+                shift 2
+                ;;
+            *) shift ;;
+        esac
+    done
+    local tagged=false
+    if $show_status || $show_log; then tagged=true; fi
+    local margin=2
+    local width=0  # actual rendering width, may be set from flags
+    local bar_source="████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████"
+    local empty_source="------------------------------------------------------------------------------------------------------------------------------------------------------"
+    local percent=0
+    local status_msg="Initializing..."
+    local -a log_buffer=()
+    for ((i=0; i<log_height; i++)); do log_buffer[i]=""; done
+    tput civis
+    local prev_term_w=0
+    while true; do
+        local term_w=$(tput cols)
+        if (( term_w != prev_term_w )); then
+            local max_allowed=$(( term_w - margin * 2 ))
+            if $full_width; then
+                width=$max_allowed
+            elif (( user_width > 0 )); then
+                width=$user_width
+                (( width > max_allowed )) && width=$max_allowed
+            else
+                width=$max_allowed
+            fi
+            prev_term_w=$term_w
+        fi
+        if read -t 0.01 -r line; then
+            if $tagged; then
+                case "$line" in
+                    P:*) percent="${line#P:}" ;;
+                    M:*) status_msg="${line#M:}" ;;
+                    L:*) 
+                        if $show_log; then
+                            local raw_msg="${line#L:}"
+                            local max_w=$((width - margin - 5))
+                            ((max_w < 10)) && max_w=10
+                            while [[ -n "$raw_msg" ]]; do
+                                local chunk="${raw_msg:0:$max_w}"
+                                raw_msg="${raw_msg:$max_w}"
+                                for ((i=0; i<log_height-1; i++)); do 
+                                    log_buffer[i]="${log_buffer[i+1]}"
+                                done
+                                log_buffer[$((log_height-1))]="$chunk"
+                            done
+                        fi
+                        ;;
+                esac
+            else
+                if [[ "$line" =~ ^[0-9]+$ ]]; then
+                    percent="$line"
+                fi
+            fi
+        elif [[ $? -le 128 ]]; then
+            break
+        fi
+        (( percent < 0 )) && percent=0
+        (( percent > 100 )) && percent=100
+        local bar_max=$(( width - (margin * 2) - 2 ))
+        (( bar_max < 10 )) && bar_max=10
+        local filled_count=$(( bar_max * percent / 100 ))
+        local spaces="${empty_source:0:$((bar_max - filled_count))}"
+        local r_global=$(( r1 + (r2 - r1) * percent / 100 ))
+        local g_global=$(( g1 + (g2 - g1) * percent / 100 ))
+        local b_global=$(( b1 + (b2 - b1) * percent / 100 ))
+        local global_color_esc="\033[38;2;${r_global};${g_global};${b_global}m"
+        printf "\r\033[K%${margin}s ${global_color_esc}%3d%% %s\033[0m\n" "" "$percent" "$label"
+        printf "\033[K%${margin}s" ""
+        if [[ "$color_mode" == "position" ]]; then
+            for ((i=0; i<filled_count; i++)); do
+                local r_pos=$(( r1 + (r2 - r1) * i / (bar_max - 1) ))
+                local g_pos=$(( g1 + (g2 - g1) * i / (bar_max - 1) ))
+                local b_pos=$(( b1 + (b2 - b1) * i / (bar_max - 1) ))
+                printf "\033[38;2;${r_pos};${g_pos};${b_pos}m█"
+            done
+        else
+            printf "%b%s" "$global_color_esc" "${bar_source:0:$filled_count}"
+        fi
+        printf "\033[38;2;60;60;60m%s\033[0m" "$spaces"
+        local lines_to_reset=1 # Current line is Line 2, so up 1 gets us back to Line 1
+        if $show_status; then
+            printf "\n\033[K%${margin}s \033[1;34m➜\033[0m %s" "" "$status_msg"
+            lines_to_reset=$((lines_to_reset + 1))
+        fi
+        if $show_log; then
+            for ((i=0; i<log_height; i++)); do
+                printf "\n\033[K%${margin}s \033[2m│ %b\033[0m" "" "${log_buffer[i]}"
+                lines_to_reset=$((lines_to_reset + 1))
+            done
+        fi
+        [[ $percent -ge 100 ]] && break
+        printf "\033[%dA" "$lines_to_reset" # Return to Line 1 start
+        sleep 0.016
+    done
+    tput cnorm
+    printf "\n"
+}
+bl_square_progress() {
+    bl_check_deps "bl_square_progress" "bl_hex_to_rgb" || return 1
+    local label="Progress"
+    local tagged=false
+    local r1=0; local g1=0; local b1=255 # Default Start: Blue
+    local r2=0; local g2=255; local b2=0  # Default End: Green
+    local width=10
+    local height=10
+    local full_width=false
+    local show_brackets=false
+    local color_mode="global"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -l|--label) label="$2"; shift 2 ;;
+            -t|--tagged) tagged=true; shift ;;
+            -w|--width) width="$2"; shift 2 ;;
+            -H|--height) height="$2"; shift 2 ;;
+            -fw|--full-width) full_width=true; shift ;;
+            --brackets) show_brackets=true; shift ;;
+            -c|--color-mode) color_mode="$2"; shift 2 ;;
+            -h|--hex|--start)
+                local rgb_out
+                rgb_out=$(bl_hex_to_rgb "$2")
+                r1="${rgb_out%% *}"
+                local tmp="${rgb_out#* }"
+                g1="${tmp%% *}"
+                b1="${tmp#* }"
+                shift 2
+                ;;
+            --end)
+                local rgb_out
+                rgb_out=$(bl_hex_to_rgb "$2")
+                r2="${rgb_out%% *}"
+                local tmp="${rgb_out#* }"
+                g2="${tmp%% *}"
+                b2="${tmp#* }"
+                shift 2
+                ;;
+            *) shift ;;
+        esac
+    done
+    local margin=2
+    local percent=0
+    local status_msg="Initializing..."
+    local empty_char="·"
+    local fill_char="■"
+    tput civis
+    while true; do
+        if read -t 0.01 -r line; then
+            if $tagged; then
+                case "$line" in
+                    P:*) percent="${line#P:}" ;;
+                    M:*) status_msg="${line#M:}" ;;
+                esac
+            else
+                if [[ "$line" =~ ^[0-9]+$ ]]; then
+                    percent="$line"
+                fi
+            fi
+        elif [[ $? -le 128 ]]; then
+            break
+        fi
+        (( percent < 0 )) && percent=0
+        (( percent > 100 )) && percent=100
+        local term_cols=${COLUMNS:-$(tput cols)}
+        local grid_w=$width
+        local extra_chars=$margin
+        if $show_brackets; then
+            extra_chars=$(( extra_chars + 3 )) # "[ " and "]" takes 3 visual spaces
+        fi
+        if $full_width; then
+            grid_w=$(( (term_cols - extra_chars) / 2 )) # divide by 2 because "■ " is 2 chars wide
+            (( grid_w < 5 )) && grid_w=5
+        fi
+        local total_cells=$(( grid_w * height ))
+        local filled_cells=$(( total_cells * percent / 100 ))
+        local r_global=$(( r1 + (r2 - r1) * percent / 100 ))
+        local g_global=$(( g1 + (g2 - g1) * percent / 100 ))
+        local b_global=$(( b1 + (b2 - b1) * percent / 100 ))
+        local global_color_esc="\033[38;2;${r_global};${g_global};${b_global}m"
+        printf "\r\033[K%${margin}s ${global_color_esc}== %s ==\033[0m\n" "" "$label"
+        for ((row=0; row<height; row++)); do
+            printf "\033[K%${margin}s" ""
+            if $show_brackets; then
+                printf "\033[1;37m[ \033[0m"
+            fi
+            for ((col=0; col<grid_w; col++)); do
+                local cell=$(( row * grid_w + col ))
+                local cell_color_esc
+                if [[ "$color_mode" == "position" ]]; then
+                    if (( total_cells > 1 )); then
+                        local r_pos=$(( r1 + (r2 - r1) * cell / (total_cells - 1) ))
+                        local g_pos=$(( g1 + (g2 - g1) * cell / (total_cells - 1) ))
+                        local b_pos=$(( b1 + (b2 - b1) * cell / (total_cells - 1) ))
+                        cell_color_esc="\033[38;2;${r_pos};${g_pos};${b_pos}m"
+                    else
+                        cell_color_esc="$global_color_esc"
+                    fi
+                else
+                    cell_color_esc="$global_color_esc"
+                fi
+                if (( cell < filled_cells )); then
+                    printf "%b%s \033[0m" "$cell_color_esc" "$fill_char"
+                else
+                    printf "\033[38;5;239m%s \033[0m" "$empty_char"
+                fi
+            done
+            if $show_brackets; then
+                printf "\033[1;37m]\033[0m"
+            fi
+            printf "\n"
+        done
+        if $tagged; then
+            printf "\033[K%${margin}s \033[1;33m%3d%%\033[0m - \033[38;5;248m%s\033[0m\n" "" "$percent" "$status_msg"
+        else
+            printf "\033[K%${margin}s \033[1;33m%3d%%\033[0m\n" "" "$percent"
+        fi
+        [[ $percent -ge 100 ]] && break
+        local lines_to_reset=$(( height + 2 ))
+        printf "\033[%dA" "$lines_to_reset" # Return to top
+        sleep 0.016
+    done
+    tput cnorm
+}
+bl_spiral_progress() {
+    bl_check_deps "bl_spiral_progress" "bl_hex_to_rgb" || return 1
+    local label="Progress"
+    local tagged=false
+    local r1=0; local g1=0; local b1=255
+    local r2=0; local g2=255; local b2=0
+    local width=10
+    local height=10
+    local full_width=false
+    local show_brackets=false
+    local color_mode="global"
+    local direction="in"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -l|--label) label="$2"; shift 2 ;;
+            -t|--tagged) tagged=true; shift ;;
+            -w|--width) width="$2"; shift 2 ;;
+            -H|--height) height="$2"; shift 2 ;;
+            -fw|--full-width) full_width=true; shift ;;
+            --brackets) show_brackets=true; shift ;;
+            -c|--color-mode) color_mode="$2"; shift 2 ;;
+            --direction) direction="$2"; shift 2 ;;
+            -h|--hex|--start)
+                local rgb_out
+                rgb_out=$(bl_hex_to_rgb "$2")
+                r1="${rgb_out%% *}"
+                local tmp="${rgb_out#* }"
+                g1="${tmp%% *}"
+                b1="${tmp#* }"
+                shift 2
+                ;;
+            --end)
+                local rgb_out
+                rgb_out=$(bl_hex_to_rgb "$2")
+                r2="${rgb_out%% *}"
+                local tmp="${rgb_out#* }"
+                g2="${tmp%% *}"
+                b2="${tmp#* }"
+                shift 2
+                ;;
+            *) shift ;;
+        esac
+    done
+    local margin=2
+    local percent=0
+    local status_msg="Initializing..."
+    local empty_char="·"
+    local fill_char="■"
+    local term_cols=${COLUMNS:-$(tput cols)}
+    local grid_w=$width
+    local extra_chars=$margin
+    if $show_brackets; then extra_chars=$(( extra_chars + 3 )); fi
+    if $full_width; then
+        grid_w=$(( (term_cols - extra_chars) / 2 ))
+        (( grid_w < 5 )) && grid_w=5
+    fi
+    local total_cells=$(( grid_w * height ))
+    local -A cell_order
+    local top=0 bottom=$((height - 1)) left=0 right=$((grid_w - 1))
+    local count=0
+    while (( count < total_cells )); do
+        for ((i=left; i<=right && count < total_cells; i++)); do
+            cell_order["$top,$i"]=$count; ((count++))
+        done
+        ((top++))
+        for ((i=top; i<=bottom && count < total_cells; i++)); do
+            cell_order["$i,$right"]=$count; ((count++))
+        done
+        ((right--))
+        for ((i=right; i>=left && count < total_cells; i--)); do
+            cell_order["$bottom,$i"]=$count; ((count++))
+        done
+        ((bottom--))
+        for ((i=bottom; i>=top && count < total_cells; i--)); do
+            cell_order["$i,$left"]=$count; ((count++))
+        done
+        ((left++))
+    done
+    tput civis
+    while true; do
+        if read -t 0.01 -r line; then
+            if $tagged; then
+                case "$line" in
+                    P:*) percent="${line#P:}" ;;
+                    M:*) status_msg="${line#M:}" ;;
+                esac
+            else
+                if [[ "$line" =~ ^[0-9]+$ ]]; then percent="$line"; fi
+            fi
+        elif [[ $? -le 128 ]]; then
+            break
+        fi
+        (( percent < 0 )) && percent=0
+        (( percent > 100 )) && percent=100
+        local filled_cells=$(( total_cells * percent / 100 ))
+        local r_global=$(( r1 + (r2 - r1) * percent / 100 ))
+        local g_global=$(( g1 + (g2 - g1) * percent / 100 ))
+        local b_global=$(( b1 + (b2 - b1) * percent / 100 ))
+        local global_color_esc="\033[38;2;${r_global};${g_global};${b_global}m"
+        printf "\r\033[K%${margin}s ${global_color_esc}== %s ==\033[0m\n" "" "$label"
+        for ((row=0; row<height; row++)); do
+            printf "\033[K%${margin}s" ""
+            if $show_brackets; then printf "\033[1;37m[ \033[0m"; fi
+            for ((col=0; col<grid_w; col++)); do
+                local order_idx=${cell_order["$row,$col"]}
+                if [[ "$direction" == "out" ]]; then
+                    order_idx=$(( total_cells - 1 - order_idx ))
+                fi
+                local cell_color_esc
+                if [[ "$color_mode" == "position" ]]; then
+                    if (( total_cells > 1 )); then
+                        local r_pos=$(( r1 + (r2 - r1) * order_idx / (total_cells - 1) ))
+                        local g_pos=$(( g1 + (g2 - g1) * order_idx / (total_cells - 1) ))
+                        local b_pos=$(( b1 + (b2 - b1) * order_idx / (total_cells - 1) ))
+                        cell_color_esc="\033[38;2;${r_pos};${g_pos};${b_pos}m"
+                    else
+                        cell_color_esc="$global_color_esc"
+                    fi
+                else
+                    cell_color_esc="$global_color_esc"
+                fi
+                if (( order_idx < filled_cells )); then
+                    printf "%b%s \033[0m" "$cell_color_esc" "$fill_char"
+                else
+                    printf "\033[38;5;239m%s \033[0m" "$empty_char"
+                fi
+            done
+            if $show_brackets; then printf "\033[1;37m]\033[0m"; fi
+            printf "\n"
+        done
+        if $tagged; then
+            printf "\033[K%${margin}s \033[1;33m%3d%%\033[0m - \033[38;5;248m%s\033[0m\n" "" "$percent" "$status_msg"
+        else
+            printf "\033[K%${margin}s \033[1;33m%3d%%\033[0m\n" "" "$percent"
+        fi
+        [[ $percent -ge 100 ]] && break
+        local lines_to_reset=$(( height + 2 ))
+        printf "\033[%dA" "$lines_to_reset"
+        sleep 0.016
+    done
+    tput cnorm
+}
+bl_terrain_loader() {
+    bl_check_deps "bl_terrain_loader" "bl_hex_to_rgb" || return 1
+    local width=40
+    local height=15
+    local label="Generating Terrain..."
+    local empty_char="░"
+    local fill_char="█"
+    local bg_color="\e[38;5;238m" # Dark grey
+    local reset="\e[0m"
+    local color_mode="time"
+    local pattern="random"
+    local r1=255; local g1=255; local b1=0 # Default start: Yellow (#FFFF00)
+    local r2=0; local g2=255; local b2=255 # Default end: Cyan (#00FFFF)
+    local fg_color="\e[38;5;46m"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -w|--width) width="$2"; shift 2 ;;
+            -h|--height) height="$2"; shift 2 ;;
+            -fw|--full-width) width=$(tput cols); shift 1 ;;
+            -fh|--full-height) height=$(( $(tput lines) - 2 )); shift 1 ;;
+            -l|--label) label="$2"; shift 2 ;;
+            -c|--color-mode) color_mode="$2"; shift 2 ;;
+            -w|--width) width="$2"; shift 2 ;;
+            -fw|--full-width) full_width=true; shift ;;
+            --pattern) pattern="$2"; shift 2 ;;
+            --minecraft) pattern="minecraft"; shift 1 ;;
+            --start)
+                local rgb_out
+                rgb_out=$(bl_hex_to_rgb "$2")
+                r1="${rgb_out%% *}"
+                local tmp="${rgb_out#* }"
+                g1="${tmp%% *}"
+                b1="${tmp#* }"
+                shift 2
+                ;;
+            --end)
+                local rgb_out
+                rgb_out=$(bl_hex_to_rgb "$2")
+                r2="${rgb_out%% *}"
+                local tmp="${rgb_out#* }"
+                g2="${tmp%% *}"
+                b2="${tmp#* }"
+                shift 2
+                ;;
+            --fg) fg_color="\e[38;5;${2}m"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    local total_blocks=$((width * height))
+    local -a grid
+    local -a unfilled
+    for ((i=0; i<total_blocks; i++)); do
+        grid[i]=0
+    done
+    if [[ "$pattern" == "center-out" || "$pattern" == "minecraft" ]]; then
+        local cx=$(( width / 2 ))
+        local cy=$(( height / 2 ))
+        local -a sort_buffer
+        for ((i=0; i<total_blocks; i++)); do
+            local x=$(( i % width ))
+            local y=$(( i / width ))
+            local dx=$(( x - cx ))
+            local dy=$(( (y - cy) * 2 ))
+            local dist=$(( dx * dx + dy * dy ))
+            local noise=0
+            if [[ "$pattern" == "minecraft" ]]; then
+                noise=$(( RANDOM % 30 )) # High noise for more chaotic edge
+            else
+                noise=$(( RANDOM % 15 )) # Low noise for center-out
+            fi
+            local final_dist=$(( dist + noise ))
+            sort_buffer[i]="$final_dist $i"
+        done
+        local idx_counter=0
+        while read -r dist idx_val; do
+            unfilled[idx_counter]=$idx_val
+            ((idx_counter++))
+        done < <(printf "%s\n" "${sort_buffer[@]}" | sort -n -r)
+    else
+        for ((i=0; i<total_blocks; i++)); do
+            unfilled[i]=$i
+        done
+    fi
+    local unfilled_count=$total_blocks
+    local current_filled=0
+    local percent=0
+    tput civis
+    echo -e "${fg_color}${label}${reset}"
+    for ((y=0; y<height; y++)); do
+        for ((x=0; x<width; x++)); do
+            echo -ne "${bg_color}${empty_char}${reset}"
+        done
+        echo ""
+    done
+    while true; do
+        if read -t 0.05 -r line; then
+            if [[ "$line" =~ ^[0-9]+$ ]]; then
+                percent="$line"
+            elif [[ "$line" == P:* ]]; then
+                percent="${line#P:}"
+            fi
+            if [[ "$percent" -gt 100 ]]; then percent=100; fi
+            if [[ "$percent" -lt 0 ]]; then percent=0; fi
+        else
+            local ret=$?
+            if [[ $ret -gt 128 ]]; then
+                :
+            else
+                break
+            fi
+        fi
+        local target_filled=$((total_blocks * percent / 100))
+        local updated=false
+        while [[ $current_filled -lt $target_filled && $unfilled_count -gt 0 ]]; do
+            local rand_idx
+            if [[ "$pattern" == "center-out" ]]; then
+                rand_idx=$(( unfilled_count - 1 )) # Pop strictly from the pre-sorted tail
+            elif [[ "$pattern" == "minecraft" ]]; then
+                if (( RANDOM % 100 < 15 )); then
+                    rand_idx=$(( RANDOM % unfilled_count ))
+                else
+                    local tail_idx=$(( unfilled_count - 1 ))
+                    local range=12
+                    if (( unfilled_count < range )); then range=$unfilled_count; fi
+                    rand_idx=$(( tail_idx - (RANDOM % range) ))
+                fi
+            else
+                rand_idx=$(( RANDOM % unfilled_count )) # Pick random
+            fi
+            local target_block=${unfilled[$rand_idx]}
+            ((current_filled++))
+            grid[$target_block]=$current_filled
+            unfilled[$rand_idx]=${unfilled[$((unfilled_count - 1))]}
+            ((unfilled_count--))
+            updated=true
+        done
+        if $updated; then
+            local global_esc="$fg_color"
+            if [[ "$color_mode" == "global" ]]; then
+                local current_r=$(( r1 + (r2 - r1) * percent / 100 ))
+                local current_g=$(( g1 + (g2 - g1) * percent / 100 ))
+                local current_b=$(( b1 + (b2 - b1) * percent / 100 ))
+                global_esc="\033[38;2;${current_r};${current_g};${current_b}m"
+            fi
+            tput cuu $height
+            for ((y=0; y<height; y++)); do
+                local row_str=""
+                for ((x=0; x<width; x++)); do
+                    local idx=$((y * width + x))
+                    if [[ ${grid[$idx]} -gt 0 ]]; then
+                        local cell_color="$global_esc"
+                        if [[ "$color_mode" == "position" ]]; then
+                            local r_pos=$(( r1 + (r2 - r1) * x / (width - 1) ))
+                            local g_pos=$(( g1 + (g2 - g1) * x / (width - 1) ))
+                            local b_pos=$(( b1 + (b2 - b1) * x / (width - 1) ))
+                            cell_color="\033[38;2;${r_pos};${g_pos};${b_pos}m"
+                        elif [[ "$color_mode" == "time" ]]; then
+                            local fill_time=${grid[$idx]}
+                            local r_time=$(( r1 + (r2 - r1) * fill_time / total_blocks ))
+                            local g_time=$(( g1 + (g2 - g1) * fill_time / total_blocks ))
+                            local b_time=$(( b1 + (b2 - b1) * fill_time / total_blocks ))
+                            cell_color="\033[38;2;${r_time};${g_time};${b_time}m"
+                        fi
+                        row_str+="${cell_color}${fill_char}${reset}"
+                    else
+                        row_str+="${bg_color}${empty_char}${reset}"
+                    fi
+                done
+                echo -ne "${row_str}\e[K\n"
+            done
+        fi
+        if [[ $percent -ge 100 && $current_filled -ge $total_blocks ]]; then
+            break
+        fi
+    done
+    tput cnorm
+    echo ""
+}
+bl_terrain_loader_opt() {
+    bl_terrain_loader "$@"
+}
+
+# --- Inlined Remote: https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/async/pid.sh ---
+declare -g -A BL_PIDS
+bl_pid_store() {
+	local name=$1
+	local pid=$2
+	BL_PIDS["$name"]="$pid"
+}
+bl_pid_wait() {
+	local name=$1
+	local pid="${BL_PIDS[$name]}"
+	[[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && wait "$pid"
+	unset "BL_PIDS[$name]"
+}
+bl_pid_status() {
+	local pid="$1"
+	if [[ -z "$pid" ]]; then
+		echo "FAILED"
+		return 1
+	fi
+	if kill -0 "$pid" 2>/dev/null; then
+		echo "RUNNING"
+		return 0
+	fi
+	wait "$pid" 2>/dev/null
+	local ec=$?
+	if (( ec == 0 || ec == 127 )); then
+		echo "SUCCESS"
+	else
+		echo "FAILED"
+	fi
+	return $ec
+}
+bl_pid_reap() {
+	for name in "${!BL_PIDS[@]}"; do
+		local pid="${BL_PIDS[$name]}"
+		if ! kill -0 "$pid" 2>/dev/null; then
+			wait "$pid" 2>/dev/null
+			unset "BL_PIDS[$name]"
+		fi
+	done
+}
+
+# --- Inlined Remote: https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/io/pipes.sh ---
+bl_file_count_feeder_() {
+	local total=$1
+	local hz=${2:-10}
+	local dir="${3:-/tmp}"
+	local pattern="${4:-*.done}"
+	local finished=0
+	local ms=$(( 1000 / hz ))
+	local interval=$(printf "%d.%03d" $(( ms / 1000 )) $(( ms % 1000 )))
+	while (( finished < total )); do
+		local files=( "$dir"/$pattern )
+		finished=${#files[@]}
+		[[ -e "${files[0]}" ]] || finished=0
+		echo "$finished"
+		sleep "$interval"
+	done
+}
+_bl_count_percent_emitter_() {
+    local total=$1
+    local flag="$2"
+    while read -r count; do
+        local percent=$(( (count * 100) / total ))
+        if [[ "$flag" == "tagged" || "$flag" == "--tagged" ]]; then
+            echo "P:$percent"
+        else
+            echo "$percent"
+        fi
+        [[ $percent -ge 100 ]] && break
+    done
+}
+bl_file_log_feeder_() {
+    local logfile="$1"
+    local hz=${2:-5}
+    local prefix="${3:-M:}"
+    local ms=$(( 1000 / hz ))
+    local interval=$(printf "%d.%03d" $(( ms / 1000 )) $(( ms % 1000 )))
+    while [[ -f "$logfile" ]]; do
+        local line=$(tail -n 1 "$logfile" | cut -c 1-80)
+        echo "${prefix}${line}"
+        sleep "$interval"
+    done
+}
+
 # --- Included: src/backend/driver_mpv.sh ---
 driver_mpv_init() {
     mpv --idle --no-video --input-ipc-server="$MPV_SOCKET" --quiet >/dev/null 2>&1 &
@@ -459,11 +1548,6 @@ deinit(){
 trap deinit EXIT INT TERM
 
 # --- Included: src/libs/imports.sh ---
-source <(curl -fsSL https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/import.sh)
-bl_import -v --strict ui/progress_bars.sh
-bl_import -v --strict core/colors.sh
-bl_import -v --strict async/pid.sh
-bl_import -v --strict io/*
 
 # --- Included: src/ui/menu.sh ---
 run_menu() {

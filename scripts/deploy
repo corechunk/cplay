@@ -3,4 +3,10 @@
 source <(curl -fsSL https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/import.sh)
 bl_import -v --strict dev/compile.sh
 
-bl_compile --dir src --out-name cplay -v -s all -r --out-dir . --main src/main.sh
+bl_compile --dir src --out-name cplay -v -s all -r --out-dir . --main src/main.sh \
+	--lib-curl start \
+	"https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/import.sh" \
+	"https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/core/colors.sh" \
+	"https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/ui/progress_bars.sh" \
+	"https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/async/pid.sh" \
+	"https://raw.githubusercontent.com/corechunk/bash-lib/main/lib/io/pipes.sh" stop

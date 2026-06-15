@@ -7,11 +7,11 @@
     cd "$SCRIPT_DIR/.."
 
     # 1. Version Injection
-    if [ ! -f ".version" ]; then
-        echo "Error: .version file not found."
+    if [ ! -f "VERSION" ]; then
+        echo "Error: VERSION file not found."
         exit 1
     fi
-    VERSION=$(cat .version)
+    VERSION=$(cat VERSION)
 
     echo "Injecting version $VERSION into src/config/env.sh..."
     

@@ -3,7 +3,7 @@ set -e
 
 # --- Install settings & Binary paths ---
 BIN_NAME="cplay"
-VERSION_FILE_NAME=".version"
+VERSION_FILE_NAME="VERSION"
 BIN_TARGET=""
 INSTALL_MODE=""
 repo_release_latest_download="https://github.com/corechunk/cplay/releases/latest/download"

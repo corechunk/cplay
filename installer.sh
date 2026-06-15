@@ -290,7 +290,7 @@ echo "Choose installation target:"
 echo "1) System-wide: $BIN_SYS (Recommended)"
 echo "2) User-specific: $BIN_USR"
 printf "Enter choice [1-2, default=1]: "
-read -r CHOICE
+read -r CHOICE < /dev/tty
 
 # Handle default selection
 [ -z "$CHOICE" ] && CHOICE="1"
@@ -333,11 +333,11 @@ if [ -n "$CONFLICTS" ]; then
 
     echo "These may prevent your new version from running due to path precedence."
     printf "Would you like to remove these conflicting files? [y/N]: "
-    read -r REMOVE_CHOICE
+    read -r REMOVE_CHOICE < /dev/tty
     
     if [ "$REMOVE_CHOICE" = "y" ] || [ "$REMOVE_CHOICE" = "Y" ]; then
         printf "Type 'confirm' to delete these files: "
-        read -r CONFIRM_STR
+        read -r CONFIRM_STR < /dev/tty
         if [ "$CONFIRM_STR" = "confirm" ]; then
             IFS_use
             for item in $CONFLICTS; do
@@ -386,8 +386,9 @@ echo "Target: $BIN_TARGET/$BIN_NAME"
 echo "Action: $ACTION_MSG"
 echo "Source: $INSTALL_MODE"
 printf "Proceed with installation? [y/N]: "
-read -r FINAL_CONFIRM
+read -r FINAL_CONFIRM < /dev/tty
 [ "$FINAL_CONFIRM" != "y" ] && [ "$FINAL_CONFIRM" != "Y" ] && { echo "Installation cancelled."; exit 0; }
+
 
 # --- Phase 7: Execution ---
 echo "Installing..."

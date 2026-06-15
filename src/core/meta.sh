@@ -3,8 +3,9 @@
 # --- Track Metadata & Cover Art Loader ---
 
 check_kitty_support() {
-    # Dynamically verify Kitty graphics protocol support
-    if command -v kitty >/dev/null 2>&1 && kitty +kitten query >/dev/null 2>&1; then
+    # Only trust TERM to detect genuine Kitty sessions
+    # Ignore KITTY_WINDOW_ID as it is inherited by child terminals (e.g. Alacritty)
+    if [[ "$TERM" == *kitty* ]]; then
         CPLAY_KITTY_SUPPORT="true"
     else
         CPLAY_KITTY_SUPPORT="false"

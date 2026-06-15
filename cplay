@@ -1320,7 +1320,7 @@ cplay_mute() {
 }
 
 # --- Included: src/config/env.sh ---
-declare -g VERSION="1.0.0.0"
+declare -g VERSION="1.0.0.1"
 declare -g TMP="/tmp/corechunk/cplay"
 declare -g ACTIVE_ENGINE="raw"
 declare -g MPV_SOCKET="$TMP/cplay-mpv.sock"
@@ -1441,7 +1441,7 @@ parse_flags() {
 
 # --- Included: src/core/meta.sh ---
 check_kitty_support() {
-    if command -v kitty >/dev/null 2>&1 && kitty +kitten query >/dev/null 2>&1; then
+    if [[ "$TERM" == *kitty* ]]; then
         CPLAY_KITTY_SUPPORT="true"
     else
         CPLAY_KITTY_SUPPORT="false"

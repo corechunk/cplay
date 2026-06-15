@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-declare -g VERSION="1.0.0.0"
+declare -g VERSION="1.0.0.1"
 
 
 # --- Environment & Engine Globals ---

@@ -85,17 +85,6 @@ fi
 echo "Running in $INSTALL_MODE mode."
 echo "Resolved Source: $SRC"
 
-# --- Phase 3.5: Source Validation ---
-if [ "$INSTALL_MODE" = "remote" ]; then
-    chmod +x "$SRC"
-fi
-
-if ! is_official_cplay "$SRC"; then
-    echo "❌ Error: The resolved source is not a valid official cplay binary."
-    echo "   This usually happens if the remote assets are missing or corrupted (e.g. 404 page)."
-    exit 1
-fi
-
 # --- Functions ---
 
 # --- IFS Helpers ---
@@ -179,6 +168,17 @@ get_installed_version() {
         *)       echo "0.0.0" ;;
     esac
 }
+
+# --- Phase 3.5: Source Validation ---
+if [ "$INSTALL_MODE" = "remote" ]; then
+    chmod +x "$SRC"
+fi
+
+if ! is_official_cplay "$SRC"; then
+    echo "❌ Error: The resolved source is not a valid official cplay binary."
+    echo "   This usually happens if the remote assets are missing or corrupted (e.g. 404 page)."
+    exit 1
+fi
 
 # --- Audit Logic ---
 echo "--- Auditing System ---"

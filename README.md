@@ -223,6 +223,7 @@ cd cplay
 ```
 cplay/
 ├── cplay                       # Compiled single-binary output
+├── VERSION                     # Version manifest
 ├── scripts/
 │   ├── deploy                  # Compilation script (bash-lib)
 │   └── test_kitty_meta.sh      # Standalone Kitty icat + metadata test tool

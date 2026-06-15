@@ -3,6 +3,9 @@
 # --- Unified Backend Player Engine Coordinator ---
 
 engine_init() {
+    # Dynamically verify Kitty support
+    check_kitty_support
+
     if [[ "$ACTIVE_ENGINE" == "mpv" ]]; then
         if command -v mpv >/dev/null 2>&1; then
             driver_mpv_init

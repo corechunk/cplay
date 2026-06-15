@@ -1242,6 +1242,7 @@ driver_raw_status() {
 
 # --- Included: src/backend/engine.sh ---
 engine_init() {
+    check_kitty_support
     if [[ "$ACTIVE_ENGINE" == "mpv" ]]; then
         if command -v mpv >/dev/null 2>&1; then
             driver_mpv_init
@@ -1439,6 +1440,13 @@ parse_flags() {
 }
 
 # --- Included: src/core/meta.sh ---
+check_kitty_support() {
+    if command -v kitty >/dev/null 2>&1 && kitty +kitten query >/dev/null 2>&1; then
+        CPLAY_KITTY_SUPPORT="true"
+    else
+        CPLAY_KITTY_SUPPORT="false"
+    fi
+}
 cplay_format_duration() {
     local seconds="${1%.*}"
     if [[ -z "$seconds" || ! "$seconds" =~ ^[0-9]+$ ]]; then

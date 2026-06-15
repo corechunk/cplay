@@ -75,8 +75,8 @@ else
         exit 1
     fi
 
-    curl -sSL "$VERSION_FILE_REMOTE" -o "$VERSION_FILE_REMOTE_FETCHED" || { echo "Error: Could not fetch version file."; exit 1; }
-    curl -sSL "$SRC_FILE_REMOTE" -o "$SRC_FILE_REMOTE_FETCHED" || { echo "Error: Could not fetch binary."; exit 1; }
+    curl -fsSL "$VERSION_FILE_REMOTE" -o "$VERSION_FILE_REMOTE_FETCHED" || { echo "Error: Could not fetch version file."; exit 1; }
+    curl -fsSL "$SRC_FILE_REMOTE" -o "$SRC_FILE_REMOTE_FETCHED" || { echo "Error: Could not fetch binary."; exit 1; }
 
     SRC="$SRC_FILE_REMOTE_FETCHED"
     VERSION_SRC="$VERSION_FILE_REMOTE_FETCHED"
@@ -84,6 +84,17 @@ fi
 
 echo "Running in $INSTALL_MODE mode."
 echo "Resolved Source: $SRC"
+
+# --- Phase 3.5: Source Validation ---
+if [ "$INSTALL_MODE" = "remote" ]; then
+    chmod +x "$SRC"
+fi
+
+if ! is_official_cplay "$SRC"; then
+    echo "❌ Error: The resolved source is not a valid official cplay binary."
+    echo "   This usually happens if the remote assets are missing or corrupted (e.g. 404 page)."
+    exit 1
+fi
 
 # --- Functions ---
 
@@ -148,6 +159,7 @@ get_package_name() {
 # Output: Version string
 get_installed_version() {
     case "$1" in
+        bash)    bash --version | head -n1 | cut -d' ' -f4 | cut -d'(' -f1 ;;
         mpv)     mpv --version 2>&1 | head -n1 | cut -d' ' -f2 ;;
         curl)    curl --version 2>&1 | head -n1 | cut -d' ' -f2 ;;
         ffmpeg)  ffmpeg -version 2>&1 | head -n1 | cut -d' ' -f3 ;;
